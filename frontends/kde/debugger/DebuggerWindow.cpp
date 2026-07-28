@@ -17,6 +17,7 @@
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPointer>
@@ -35,13 +36,18 @@ namespace {
  * screenful and a bit rather than a scrollback. */
 constexpr int kDisasmLines = 24;
 
+/* The memory pane: a fixed-size hex dump rebuilt from m_memViewAddr on every
+ * stop, the same way the disassembly list is. */
+constexpr int kMemBytesPerRow = 16;
+constexpr int kMemRows = 16;
+
 class DebuggerDialog : public QWidget {
 public:
     DebuggerDialog(QWidget *parent, cocodebug *dbg)
         : QWidget(parent, Qt::Window), m_dbg(dbg)
     {
         setWindowTitle(QStringLiteral("Debugger"));
-        resize(680, 560);
+        resize(680, 760);
 
         auto *outer = new QVBoxLayout(this);
 
@@ -88,6 +94,26 @@ public:
         m_regs->setMinimumWidth(200);
         panes->addWidget(m_regs);
         outer->addLayout(panes, 1);
+
+        auto *memBar = new QHBoxLayout;
+        memBar->addWidget(new QLabel(QStringLiteral("Address:"), this));
+        m_memAddr = new QLineEdit(QStringLiteral("0000"), this);
+        m_memAddr->setMaximumWidth(80);
+        connect(m_memAddr, &QLineEdit::returnPressed, this,
+                [this] { goToMemAddr(); });
+        memBar->addWidget(m_memAddr);
+        auto *memGo = new QPushButton(QStringLiteral("Go"), this);
+        memGo->setToolTip(QStringLiteral("Jump to this address"));
+        connect(memGo, &QPushButton::clicked, this,
+                [this] { goToMemAddr(); });
+        memBar->addWidget(memGo);
+        memBar->addStretch();
+        outer->addLayout(memBar);
+
+        m_mem = new QLabel(this);
+        m_mem->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        m_mem->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        outer->addWidget(m_mem);
 
         new QShortcut(QKeySequence(Qt::Key_F5), this, [this] { toggleRun(); });
         new QShortcut(QKeySequence(Qt::Key_F7), this,
@@ -138,6 +164,15 @@ private:
             cocodebug_pause(m_dbg);
     }
 
+    void goToMemAddr()
+    {
+        bool ok = false;
+        const uint v = m_memAddr->text().toUInt(&ok, 16);
+        if (ok)
+            m_memViewAddr = (uint16_t)v;
+        m_seenSerial = 0; /* force a redraw at the new address */
+    }
+
     void poll()
     {
         const uint64_t serial = cocodebug_stop_serial(m_dbg);
@@ -163,6 +198,7 @@ private:
             /* Everything on show is only valid while the machine is parked,
              * so clear it rather than leave a stale snapshot looking live. */
             m_regs->clear();
+            m_mem->clear();
             return;
         }
 
@@ -203,6 +239,33 @@ private:
             auto *item = new QListWidgetItem(text, m_disasm);
             item->setData(Qt::UserRole, (uint)l.addr);
         }
+
+        uint8_t mem[kMemBytesPerRow * kMemRows];
+        const int memN = cocodebug_read(m_dbg, m_memViewAddr, mem, sizeof(mem));
+        QString dump;
+        for (int row = 0; row * kMemBytesPerRow < memN; row++) {
+            const uint16_t addr =
+                (uint16_t)(m_memViewAddr + row * kMemBytesPerRow);
+            QString ascii;
+
+            dump += hex16(addr) + QLatin1Char(' ');
+            for (int col = 0; col < kMemBytesPerRow; col++) {
+                const int idx = row * kMemBytesPerRow + col;
+                if (idx < memN) {
+                    const uint8_t b = mem[idx];
+                    dump += QLatin1Char(' ') + hex8(b);
+                    ascii += (b >= 0x20 && b < 0x7f) ? QLatin1Char((char)b)
+                                                      : QLatin1Char('.');
+                } else {
+                    dump += QStringLiteral("   ");
+                    ascii += QLatin1Char(' ');
+                }
+            }
+            dump += QStringLiteral("  ") + ascii;
+            if ((row + 1) * kMemBytesPerRow < memN)
+                dump += QLatin1Char('\n');
+        }
+        m_mem->setText(dump);
     }
 
     static QString hex8(uint8_t v)
@@ -225,10 +288,13 @@ private:
     cocodebug *m_dbg;
     QLabel *m_status = nullptr;
     QLabel *m_regs = nullptr;
+    QLabel *m_mem = nullptr;
+    QLineEdit *m_memAddr = nullptr;
     QListWidget *m_disasm = nullptr;
     QPushButton *m_runPause = nullptr;
     uint64_t m_seenSerial = 0;
     bool m_wasPaused = false;
+    uint16_t m_memViewAddr = 0;
 };
 
 /* One live window at a time: a second would fight the first over the same

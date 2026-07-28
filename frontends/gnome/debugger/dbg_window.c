@@ -17,11 +17,18 @@
 
 #include "debugger/dbg_window.h"
 
+#include <stdlib.h>
+
 #include "cocodebug.h"
 
 /* How much disassembly to show. The list is rebuilt on every stop, so this is
  * a screenful and a bit rather than a scrollback. */
 #define DISASM_LINES 24
+
+/* The memory pane: a fixed-size hex dump rebuilt from mem_view_addr on every
+ * stop, the same way the disassembly list is. */
+#define MEM_BYTES_PER_ROW 16
+#define MEM_ROWS 16
 
 typedef struct {
     GtkWindow *window;
@@ -31,11 +38,14 @@ typedef struct {
     GtkLabel *status;
     GtkListBox *disasm;
     GtkLabel *regs;
+    GtkLabel *mem;
+    GtkEntry *mem_addr;
     GtkButton *run_pause;
 
     guint tick_id;
     uint64_t seen_serial;
     int was_paused;
+    uint16_t mem_view_addr;
 } DebuggerUI;
 
 /* One live window at a time: a second one would fight the first over the same
@@ -129,6 +139,43 @@ static void refresh_disasm(DebuggerUI *ui)
     }
 }
 
+static void refresh_mem(DebuggerUI *ui)
+{
+    uint8_t buf[MEM_BYTES_PER_ROW * MEM_ROWS];
+    GString *text;
+    int row, col, n;
+
+    n = cocodebug_read(ui->dbg, ui->mem_view_addr, buf, sizeof(buf));
+    if (n <= 0) {
+        gtk_label_set_text(ui->mem, "");
+        return;
+    }
+
+    text = g_string_new(NULL);
+    for (row = 0; row * MEM_BYTES_PER_ROW < n; row++) {
+        uint16_t addr = (uint16_t)(ui->mem_view_addr + row * MEM_BYTES_PER_ROW);
+
+        g_string_append_printf(text, "%04X ", addr);
+        for (col = 0; col < MEM_BYTES_PER_ROW; col++) {
+            int idx = row * MEM_BYTES_PER_ROW + col;
+            if (idx < n)
+                g_string_append_printf(text, " %02X", buf[idx]);
+            else
+                g_string_append(text, "   ");
+        }
+        g_string_append(text, "  ");
+        for (col = 0; col < MEM_BYTES_PER_ROW; col++) {
+            int idx = row * MEM_BYTES_PER_ROW + col;
+            uint8_t b = (idx < n) ? buf[idx] : (uint8_t)' ';
+            g_string_append_c(text, (b >= 0x20 && b < 0x7f) ? (char)b : '.');
+        }
+        if ((row + 1) * MEM_BYTES_PER_ROW < n)
+            g_string_append_c(text, '\n');
+    }
+    gtk_label_set_text(ui->mem, text->str);
+    g_string_free(text, TRUE);
+}
+
 static void refresh(DebuggerUI *ui)
 {
     const int paused = cocodebug_is_paused(ui->dbg);
@@ -139,11 +186,13 @@ static void refresh(DebuggerUI *ui)
     if (paused) {
         refresh_regs(ui);
         refresh_disasm(ui);
+        refresh_mem(ui);
     } else {
         /* Everything on show is only valid while parked, so clear it rather
          * than leave a stale snapshot that looks live. */
         gtk_label_set_text(ui->regs, "");
         gtk_list_box_remove_all(ui->disasm);
+        gtk_label_set_text(ui->mem, "");
     }
     ui->was_paused = paused;
 }
@@ -195,6 +244,22 @@ static void on_clear_bp(GtkButton *b, gpointer u)
     cocodebug_breakpoint_clear_all(ui->dbg);
     ui->seen_serial = 0; /* redraw the markers */
 }
+
+static void go_to_mem_addr(DebuggerUI *ui)
+{
+    const char *text = gtk_editable_get_text(GTK_EDITABLE(ui->mem_addr));
+    char *end;
+    unsigned long v = strtoul(text, &end, 16);
+
+    if (end != text)
+        ui->mem_view_addr = (uint16_t)v;
+    ui->seen_serial = 0; /* force a redraw at the new address */
+}
+
+static void on_mem_go(GtkButton *button, gpointer user_data)
+{ (void)button; go_to_mem_addr(user_data); }
+static void on_mem_addr_activate(GtkEntry *entry, gpointer user_data)
+{ (void)entry; go_to_mem_addr(user_data); }
 
 static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code,
                        GdkModifierType state, gpointer user_data)
@@ -253,7 +318,8 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
 {
     DebuggerUI *ui;
     cocodebug *dbg;
-    GtkWidget *box, *panes, *scroller, *regbox, *header, *bar;
+    GtkWidget *box, *panes, *scroller, *regbox, *header, *bar, *mem_bar,
+              *mem_scroller;
     GtkEventController *keys;
 
     if (g_ui) {
@@ -279,7 +345,7 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
 
     ui->window = GTK_WINDOW(adw_window_new());
     gtk_window_set_title(ui->window, "Debugger");
-    gtk_window_set_default_size(ui->window, 640, 560);
+    gtk_window_set_default_size(ui->window, 640, 720);
     gtk_window_set_transient_for(ui->window, parent);
 
     header = adw_header_bar_new();
@@ -334,10 +400,46 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     gtk_box_append(GTK_BOX(panes), scroller);
     gtk_box_append(GTK_BOX(panes), regbox);
 
+    mem_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_margin_top(mem_bar, 6);
+    gtk_widget_set_margin_bottom(mem_bar, 6);
+    gtk_widget_set_margin_start(mem_bar, 6);
+    gtk_widget_set_margin_end(mem_bar, 6);
+    gtk_box_append(GTK_BOX(mem_bar), gtk_label_new("Address:"));
+    ui->mem_addr = GTK_ENTRY(gtk_entry_new());
+    gtk_editable_set_text(GTK_EDITABLE(ui->mem_addr), "0000");
+    gtk_editable_set_width_chars(GTK_EDITABLE(ui->mem_addr), 6);
+    g_signal_connect(ui->mem_addr, "activate",
+                     G_CALLBACK(on_mem_addr_activate), ui);
+    gtk_box_append(GTK_BOX(mem_bar), GTK_WIDGET(ui->mem_addr));
+    gtk_box_append(GTK_BOX(mem_bar),
+                   tool_button("_Go", "Jump to this address",
+                               G_CALLBACK(on_mem_go), ui));
+
+    ui->mem = GTK_LABEL(gtk_label_new(""));
+    gtk_label_set_xalign(ui->mem, 0.0f);
+    gtk_label_set_yalign(ui->mem, 0.0f);
+    gtk_widget_add_css_class(GTK_WIDGET(ui->mem), "monospace");
+    mem_scroller = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(mem_scroller),
+                                  GTK_WIDGET(ui->mem));
+    /* No vexpand: the disasm pane above soaks up extra space instead. This
+     * just needs to be tall enough to show all MEM_ROWS without the box
+     * layout shrinking it to nothing. */
+    gtk_scrolled_window_set_min_content_height(
+        GTK_SCROLLED_WINDOW(mem_scroller), 220);
+    gtk_widget_set_margin_start(mem_scroller, 6);
+    gtk_widget_set_margin_end(mem_scroller, 6);
+    gtk_widget_set_margin_bottom(mem_scroller, 6);
+    gtk_widget_set_hexpand(mem_scroller, TRUE);
+
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_append(GTK_BOX(box), header);
     gtk_box_append(GTK_BOX(box), bar);
     gtk_box_append(GTK_BOX(box), panes);
+    gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    gtk_box_append(GTK_BOX(box), mem_bar);
+    gtk_box_append(GTK_BOX(box), mem_scroller);
     adw_window_set_content(ADW_WINDOW(ui->window), box);
 
     keys = gtk_event_controller_key_new();

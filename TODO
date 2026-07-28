@@ -144,8 +144,8 @@ Next
 ----
 
 
-M6 (in progress) The disassembler, the engine and both Linux debugger
-    windows are done. Still open:
+M6 (in progress) The disassembler, the engine, both Linux debugger windows
+    and their memory panes are done. Still open:
       * core/debugger/cocovideo.c -- VDG text/semigraphics/PMODE and the
         CoCo 3 GIME modes, for the debugger's video pane.
       * 6309 opcodes. The disassembler API takes no CPU parameter yet;
@@ -155,9 +155,14 @@ M6 (in progress) The disassembler, the engine and both Linux debugger
         is no equivalent shipped with XRoar, so this needs a source deciding
         first (HDB-DOS and Super Extended BASIC entry points would be the
         useful ones).
-      * A memory pane. cocodebug_read is there and tested; nothing shows it
-        yet.
       * The macOS and Windows debugger windows, with those frontends (M10).
+
+    The memory pane is a 16x16 hex+ASCII dump under the disassembly/register
+    row, with an address entry and Go button (GtkEntry / QLineEdit) to jump
+    around; same poll-and-redraw shape as the rest of the window, built on
+    the already-tested cocodebug_read. Verified by hand in both frontends via
+    COCO_OPEN_DEBUGGER=1 (window.c / MainWindow.cpp's developer affordance
+    that opens the debugger alongside the main window at startup).
 
 M7  CI: linux, then macOS and Windows, then flatpak.
 
