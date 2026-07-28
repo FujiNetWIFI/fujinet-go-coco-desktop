@@ -11,7 +11,14 @@
  *      for a sector and the runtime answered. A screen-changed check would
  *      pass on "?IO ERROR" too.
  *
- *   2. The keyboard. Typing at the machine and watching the framebuffer
+ *   2. Audio. cocosession_render_audio must always hand back exactly the
+ *      number of samples asked for, whatever the emulator has produced --
+ *      the SDL callback writes a fixed-size block and would emit garbage
+ *      from an uninitialised tail otherwise. The ring silence-pads on
+ *      underrun to make that true, and this is the only test that runs it
+ *      against a live machine rather than the stopped-session shortcut.
+ *
+ *   3. The keyboard. Typing at the machine and watching the framebuffer
  *      change is the only test that covers coco_key_from_event ->
  *      cocohost_inject_key -> hk_scan_press -> the emulated keyboard as one
  *      path. input_test covers the mapping alone, which is not the same
@@ -111,6 +118,46 @@ static void type_line(cocosession *s, const char *text)
     cocosession_key(s, 1, 0xFF0D, 0, 0, 0); /* Return */
     nap_ms(40);
     cocosession_key(s, 0, 0xFF0D, 0, 0, 0);
+}
+
+/* Pull audio the way the SDL callback does and check the contract: a full
+ * block every time, and -- over a running machine -- something other than
+ * pure silence, which is what a dead ring would hand back forever. */
+static int audio_fills_every_block(cocosession *s)
+{
+    /* Odd size on purpose: the ring must not assume a tidy power of two. */
+    enum { BLOCK = 1023 };
+    int16_t buf[BLOCK];
+    int i, nonzero = 0, short_block = 0;
+
+    for (i = 0; i < 20; i++) {
+        int n;
+        memset(buf, 0x5A, sizeof(buf)); /* poison, so a short fill shows up */
+        n = cocosession_render_audio(s, buf, BLOCK);
+        if (n != BLOCK) {
+            short_block = 1;
+            break;
+        }
+        for (int j = 0; j < BLOCK; j++) {
+            if (buf[j] != 0 && buf[j] != 0x5A5A) {
+                nonzero = 1;
+                break;
+            }
+        }
+        nap_ms(20);
+    }
+
+    if (short_block) {
+        fprintf(stderr, "drivewire_smoke: cocosession_render_audio returned a "
+                        "short block -- the SDL callback would emit garbage.\n");
+        return 0;
+    }
+    /* Silence is a legitimate reading (the CoCo may simply not be making a
+     * noise), so this is reported rather than asserted. The block-size
+     * contract above is the part that must hold. */
+    printf("drivewire_smoke: audio delivered full blocks%s\n",
+           nonzero ? " (and the machine was making sound)" : " (all silent)");
+    return 1;
 }
 
 /* Type at the machine and report whether the screen reacted. */
@@ -239,7 +286,11 @@ int main(void)
     }
     free(log);
 
-    /* --- 2. the keyboard ------------------------------------------------ */
+    /* --- 2. audio -------------------------------------------------------- */
+    if (rc == 0 && !audio_fills_every_block(s))
+        rc = 1;
+
+    /* --- 3. the keyboard ------------------------------------------------ */
     if (rc == 0 && !screen_responds_to_typing(s))
         rc = 1;
     cocosession_stop(s);

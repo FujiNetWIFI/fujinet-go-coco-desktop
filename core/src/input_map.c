@@ -300,3 +300,31 @@ int coco_axis_from_stick(float v, float deadzone)
     if (value > 65535) value = 65535;
     return value;
 }
+
+int coco_pad_for_port(const int *bindings, int npads, int port)
+{
+    int i, seen = 0;
+
+    /* A machine with two ports has no third one to assign a pad to, however
+     * many are plugged in. */
+    if (!bindings || port < 0 || port >= COCOSESSION_JOYSTICK_PORTS)
+        return -1;
+
+    /* An explicit binding wins outright. */
+    for (i = 0; i < npads; i++)
+        if (bindings[i] == port)
+            return i;
+
+    /* Otherwise the unbound pads fill the remaining ports in order. Pads
+     * bound to *another* port are skipped rather than counted, so binding
+     * pad 0 to the left port hands the right port to pad 1 rather than
+     * leaving it dead. */
+    for (i = 0; i < npads; i++) {
+        if (bindings[i] >= 0)
+            continue;
+        if (seen == port)
+            return i;
+        seen++;
+    }
+    return -1;
+}

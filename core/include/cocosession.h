@@ -41,6 +41,10 @@ extern "C" {
  * FujiNet has one running. The desktop targets each take a high port instead
  * (ADAM 65214, Apple II 64001), so all three can run at once and none of them
  * fights a standalone build. */
+/* The CoCo has two joystick ports: 0 = right, 1 = left. The right one is what
+ * nearly every game reads. */
+#define COCOSESSION_JOYSTICK_PORTS 2
+
 #define COCOSESSION_BECKER_PORT 65504
 #define COCOSESSION_WEBUI_PORT  64002
 
@@ -212,6 +216,19 @@ void cocosession_reset(cocosession *s);
  * Pure function, shared by every frontend and unit-tested on its own. */
 int coco_key_from_event(uint32_t keysym, uint32_t unicode, int ctrl_down,
                         int shift_down, unsigned *scancode_out);
+
+/* Which connected pad drives `port`?
+ *
+ * bindings[i] is what pad i is bound to: a port number, or -1 for automatic.
+ * Returns the pad index, or -1 when no pad drives that port -- including when
+ * `port` is not one the machine has. An explicit
+ * binding wins; the rest fall into the free ports in order, so the first
+ * connected pad takes the right port (which is the one nearly every game
+ * reads) and the second takes the left.
+ *
+ * Pure function, split out of the SDL backend so the assignment rules can be
+ * tested without any hardware attached. */
+int coco_pad_for_port(const int *bindings, int npads, int port);
 
 /* Apply a gamepad stick reading to a joystick axis: applies the deadzone,
  * rescales the remainder to the full -1..1 range so the joystick still reaches

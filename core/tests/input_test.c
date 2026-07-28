@@ -60,6 +60,18 @@ static void expect_axis_near(const char *what, float v, float deadzone,
     printf("ok   %s\n", what);
 }
 
+static void expect_pad(const char *what, const int *bindings, int npads,
+                       int port, int want)
+{
+    int got = coco_pad_for_port(bindings, npads, port);
+    if (got != want) {
+        printf("FAIL %s: pad %d, expected %d\n", what, got, want);
+        failures++;
+        return;
+    }
+    printf("ok   %s\n", what);
+}
+
 int main(void)
 {
     /* --- letters and digits: HID positions ------------------------------ */
@@ -128,6 +140,28 @@ int main(void)
     expect_axis("deadzone still reaches the stop", -1.0f, 0.18f, 0);
     /* Just past a 0.18 deadzone is just past centre, not a jump to the edge. */
     expect_axis_near("just past the deadzone", 0.19f, 0.18f, 33167, 400);
+
+    /* --- gamepad -> joystick port assignment ---------------------------- */
+    {
+        /* -1 means "no explicit binding": the automatic case. */
+        const int none[]  = { -1, -1, -1 };
+        const int left0[] = { 1, -1 };      /* pad 0 pinned to the left port */
+        const int both[]  = { 1, 0 };       /* deliberately crossed over */
+
+        expect_pad("no pads, no assignment", NULL, 0, 0, -1);
+        expect_pad("one pad takes the right port", none, 1, 0, 0);
+        expect_pad("...and nothing drives the left", none, 1, 1, -1);
+        expect_pad("a second pad takes the left port", none, 2, 1, 1);
+        expect_pad("...while the first keeps the right", none, 2, 0, 0);
+        expect_pad("a third pad drives nothing", none, 3, 2, -1);
+        /* Pinning pad 0 to the left must hand the right port to pad 1, not
+         * leave it dead -- the bug a naive "port'th unbound pad" loop has. */
+        expect_pad("pinning pad 0 left frees the right for pad 1",
+                   left0, 2, 0, 1);
+        expect_pad("...and pad 0 still drives the left", left0, 2, 1, 0);
+        expect_pad("explicit bindings can be crossed over", both, 2, 0, 1);
+        expect_pad("...both ways", both, 2, 1, 0);
+    }
 
     if (failures) {
         printf("\n%d failure(s)\n", failures);

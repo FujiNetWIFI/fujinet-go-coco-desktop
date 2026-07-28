@@ -25,7 +25,7 @@
 #include "session_internal.h"
 
 #define MAX_PADS 4
-#define NUM_PORTS 2
+#define NUM_PORTS COCOSESSION_JOYSTICK_PORTS
 /* Matches the Android GameControllerMapper. Applied by coco_axis_from_stick,
  * which rescales the live travel so the joystick can still reach its stops. */
 #define DEADZONE 0.18f
@@ -84,24 +84,17 @@ static void read_pad(SDL_Gamepad *pad, pad_reading *out)
                 SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_NORTH);
 }
 
-/* Which pad drives `port`: the one explicitly bound to it, else the port'th
- * pad that is not explicitly bound anywhere. Caller holds g->mtx. Returns -1
- * when no pad drives that port. */
+/* Which pad drives `port`. The rules live in coco_pad_for_port (input_map.c)
+ * so they can be tested without hardware; this just hands over the current
+ * bindings. Caller holds g->mtx. */
 static int pad_for_port(gamepad_state *g, int port)
 {
-    int i, seen = 0;
+    int bindings[MAX_PADS];
+    int i;
 
     for (i = 0; i < g->count; i++)
-        if (g->pads[i].port == port)
-            return i;
-    for (i = 0; i < g->count; i++) {
-        if (g->pads[i].port >= 0)
-            continue; /* spoken for by another port */
-        if (seen == port)
-            return i;
-        seen++;
-    }
-    return -1;
+        bindings[i] = g->pads[i].port;
+    return coco_pad_for_port(bindings, g->count, port);
 }
 
 static void sync_devices(cocosession *s, gamepad_state *g)

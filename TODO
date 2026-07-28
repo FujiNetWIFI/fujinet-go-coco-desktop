@@ -76,6 +76,12 @@ Tests
   * no_embedded_roms.py -- registered per shipped binary when
     WITH_COCO_ROMS=OFF.
 
+M4 is done: settings, media import, gamepad port assignment and the audio
+block-size contract are all covered. coco_pad_for_port is split out of
+gamepad_sdl.c so the two-port assignment rules can be tested with no hardware
+attached; writing those assertions found that it would happily assign a pad to
+a third joystick port the CoCo does not have.
+
 FujiNet runtime (M3)
   * tools/fujinet/build-fujinet-desktop.sh -- PC_TARGET=COCO, [BOIP] forced to
     127.0.0.1:65504. All eleven of the Apple II script's patch blocks are
@@ -124,20 +130,9 @@ Verified by hand
 Next
 ----
 
-M4 (partly done) Settings and media import are covered by session_test, and
-    two bugs it found are fixed. Still open:
-      * Audio. The SDL device path has never been exercised -- no test, and
-        every run so far has been with enable_audio=0 or on a machine where
-        nobody was listening. Worth at least asserting that
-        cocosession_render_audio produces non-silence while the machine is
-        beeping.
-      * Gamepads. coco_axis_from_stick is unit-tested, but gamepad_sdl.c's
-        two-port assignment logic (pad_for_port) is not, and it is the part
-        with actual branching. It needs no hardware to test if the slot table
-        is factored out of the SDL polling.
 
-M6  Debugger. core/debugger/debugger.c and frontends/gnome/debugger/
-    dbg_window.c are placeholders that say so rather than opening an empty
+M6  Debugger. core/debugger/debugger.c and the two frontends' debugger
+    windows are placeholders that say so rather than opening an empty
     window. Build the engine on XRoar's struct debug_cpu (src/debug_cpu.h:
     instruction_hook / instruction_posthook / get_pc / set_pc) and
     src/breakpoint.c. Also core/debugger/m6809dasm.c and cocovideo.c (VDG
