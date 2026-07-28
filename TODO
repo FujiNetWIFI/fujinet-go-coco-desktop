@@ -70,6 +70,9 @@ Tests
     no ROMs, no libfujinet, or a Becker port someone else is holding -- and
     says which, because a leftover standalone fujinet-pc-coco is the single
     most confusing way for this to look broken.
+  * session_test -- media/ROM import routing, ROM detection per machine, the
+    menu enumerations, the live setters' clamping, and settings persistence
+    across sessions. No emulator, so it runs in milliseconds.
   * no_embedded_roms.py -- registered per shipped binary when
     WITH_COCO_ROMS=OFF.
 
@@ -121,9 +124,17 @@ Verified by hand
 Next
 ----
 
-M4  Settings/media/gamepad/audio end-to-end (most of the code is written; this
-    is the pass that exercises it). Media import and the gamepad path are the
-    two with no test coverage at all yet.
+M4 (partly done) Settings and media import are covered by session_test, and
+    two bugs it found are fixed. Still open:
+      * Audio. The SDL device path has never been exercised -- no test, and
+        every run so far has been with enable_audio=0 or on a machine where
+        nobody was listening. Worth at least asserting that
+        cocosession_render_audio produces non-silence while the machine is
+        beeping.
+      * Gamepads. coco_axis_from_stick is unit-tested, but gamepad_sdl.c's
+        two-port assignment logic (pad_for_port) is not, and it is the part
+        with actual branching. It needs no hardware to test if the slot table
+        is factored out of the SDL polling.
 
 M6  Debugger. core/debugger/debugger.c and frontends/gnome/debugger/
     dbg_window.c are placeholders that say so rather than opening an empty

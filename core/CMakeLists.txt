@@ -279,11 +279,15 @@ target_link_libraries(boot_smoke cocosession)
 # can lay the ROMs down itself instead of depending on a provisioned session.
 target_include_directories(boot_smoke PRIVATE src)
 
+add_executable(session_test tests/session_test.c)
+target_link_libraries(session_test cocosession)
+
 add_executable(drivewire_smoke tests/drivewire_smoke.c)
 target_link_libraries(drivewire_smoke cocosession)
 target_include_directories(drivewire_smoke PRIVATE src)
 
 add_test(NAME input COMMAND input_test)
+add_test(NAME session COMMAND session_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME drivewire_smoke COMMAND drivewire_smoke)
 # Both need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;

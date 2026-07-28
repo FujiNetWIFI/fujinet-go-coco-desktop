@@ -360,6 +360,19 @@ cocosession *cocosession_new(const cocosession_paths *paths)
     coco_cond_init_monotonic(&s->start_cv);
 
     settings_init(s);
+
+    /* Publish the persisted machine/video selection immediately, so the
+     * accessors mean something before (and without) a start. The frontends
+     * build their radio menus from these, and a start that failed -- no ROMs
+     * imported yet, say -- would otherwise leave every menu showing the
+     * defaults rather than what the user actually has selected. */
+    {
+        cocosession_start_opts opts;
+        cocosession_default_opts(s, &opts);
+        s->cur_machine = opts.machine;
+        s->cur_tv_input = opts.tv_input;
+        s->cur_ccr = opts.ccr;
+    }
     return s;
 }
 

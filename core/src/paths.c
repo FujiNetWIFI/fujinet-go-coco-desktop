@@ -327,6 +327,21 @@ int paths_init(cocosession *s, const cocosession_paths *p)
     mkdir_p(s->roms_dir);
     paths_materialise_roms(s);
 
+    /* The FujiNet runtime tree. These are pure derivations of data_dir, so
+     * they are settled here rather than in paths_provision_fujinet -- that
+     * runs only when the runtime is actually started, and a session with
+     * FujiNet disabled would otherwise have an empty SD path, which makes
+     * "Import Disk Image..." fail with "No FujiNet SD directory" and
+     * cocosession_sd_path() return "". Knowing WHERE the tree goes does not
+     * depend on the library being found; provisioning it does. */
+    snprintf(s->fujinet_root, sizeof(s->fujinet_root), "%s/fujinet",
+             s->data_dir);
+    snprintf(s->fujinet_config, sizeof(s->fujinet_config), "%s/fnconfig.ini",
+             s->fujinet_root);
+    snprintf(s->fujinet_sd, sizeof(s->fujinet_sd), "%s/SD", s->fujinet_root);
+    snprintf(s->fujinet_data, sizeof(s->fujinet_data), "%s/data",
+             s->fujinet_root);
+
     /* Cartridge images (.rom/.ccc) the user imports. Separate from roms_dir so
      * a cartridge cannot shadow a system ROM by sharing its basename. */
     snprintf(s->carts_dir, sizeof(s->carts_dir), "%s/carts", s->data_dir);
@@ -356,14 +371,6 @@ int paths_provision_fujinet(cocosession *s)
     const char *env;
     char src_root[COCO_PATH_MAX];
     char probe[COCO_PATH_MAX];
-
-    snprintf(s->fujinet_root, sizeof(s->fujinet_root), "%s/fujinet",
-             s->data_dir);
-    snprintf(s->fujinet_config, sizeof(s->fujinet_config), "%s/fnconfig.ini",
-             s->fujinet_root);
-    snprintf(s->fujinet_sd, sizeof(s->fujinet_sd), "%s/SD", s->fujinet_root);
-    snprintf(s->fujinet_data, sizeof(s->fujinet_data), "%s/data",
-             s->fujinet_root);
 
     /* Resolve the shared library unless the caller pinned/disabled it.
      * Every platform's name is probed so this path layer is shared
