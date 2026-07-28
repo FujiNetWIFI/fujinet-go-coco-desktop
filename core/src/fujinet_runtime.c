@@ -14,6 +14,16 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 #include "compat.h"
 #include "dynlib.h"
 #include "session_internal.h"
@@ -111,6 +121,54 @@ int fujinet_start(cocosession *s)
     s->fujinet_running = 1;
     pthread_mutex_unlock(&g_mtx);
     return 0;
+}
+
+/* Wait until something is actually accepting on the Becker port.
+ *
+ * fujinet_start() returning is NOT enough, and this is the trap that makes
+ * this target different. main_setup() comes back as soon as the devices are
+ * constructed, but the DriveWire bus then logs "BoIPChannel: No WiFi!" and
+ * suspends itself for a full second before it begins listening. Start the
+ * emulator in that window and HDB-DOS boots, prints its banner, asks the
+ * DriveWire server for its boot sector, gets nothing -- and hangs there
+ * forever, with no OK prompt and no way to type. The screen just sits on the
+ * banner looking like the emulator is fine.
+ *
+ * So probe the port instead of guessing at a sleep: connect to it until that
+ * succeeds. The probe connection is closed immediately; XRoar's becker client
+ * makes the real one. Returns 0 once the listener is up, -1 on timeout --
+ * which is not fatal, because the patched becker.c does keep retrying, it
+ * just means the first seconds of DriveWire are lost. */
+int fujinet_wait_for_becker(cocosession *s, int timeout_ms)
+{
+    int waited = 0;
+
+    if (!s->fujinet_running)
+        return -1;
+
+    for (;;) {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd >= 0) {
+            struct sockaddr_in addr;
+            int ok;
+            memset(&addr, 0, sizeof(addr));
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(COCOSESSION_BECKER_PORT);
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            ok = connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+            coco_closesocket(fd);
+            if (ok)
+                return 0;
+        }
+        if (waited >= timeout_ms) {
+            fprintf(stderr, "cocosession: the FujiNet Becker listener did not "
+                            "come up within %d ms; the machine may need a "
+                            "reset once it does\n", timeout_ms);
+            return -1;
+        }
+        coco_sleep_ms(25);
+        waited += 25;
+    }
 }
 
 void fujinet_stop(cocosession *s)

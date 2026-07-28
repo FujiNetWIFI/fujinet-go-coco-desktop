@@ -20,7 +20,11 @@
 #include "session_internal.h"
 
 #if defined(_WIN32)
+#include <direct.h> /* _getcwd */
 #include <windows.h>
+#define getcwd _getcwd
+#else
+#include <unistd.h>
 #endif
 
 /* Compiled-in development fallbacks (set by CMake to paths in the source /
@@ -242,6 +246,48 @@ static void default_dir(char *dst, size_t dstsz, const char *xdg_env,
 #endif
 }
 
+/* Is this path already rooted? On Windows a leading separator is not enough:
+ * "\foo" is relative to the current drive. */
+static int is_absolute(const char *p)
+{
+    if (!p || !*p) return 0;
+#if defined(_WIN32)
+    if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
+        p[1] == ':' && is_sep(p[2]))
+        return 1;
+    return is_sep(p[0]) && is_sep(p[1]); /* \\server\share */
+#else
+    return p[0] == '/';
+#endif
+}
+
+/* Rewrite a relative directory in place against the current working
+ * directory.
+ *
+ * This is not cosmetic, and it is more important here than on the other
+ * targets. The FujiNet entry wrapper chdir()s into its runtime root before
+ * calling main_setup, and on THIS target FujiNet starts before the emulator
+ * -- so by the time XRoar resolves -rompath, the process CWD is somewhere
+ * else entirely and a relative path silently finds nothing. The machine then
+ * comes up with "(unpopulated)" ROM slots and a blank screen, with the files
+ * sitting right there on disk.
+ *
+ * Resolving once, at startup, means nothing downstream has to care who
+ * chdir'd. Left alone if it cannot be resolved: a relative path is still
+ * better than an empty one. */
+static void make_absolute(char *path, size_t size)
+{
+    char cwd[COCO_PATH_MAX];
+    char joined[COCO_PATH_MAX];
+
+    if (is_absolute(path))
+        return;
+    if (!getcwd(cwd, sizeof(cwd)))
+        return;
+    snprintf(joined, sizeof(joined), "%s/%s", cwd, path);
+    snprintf(path, size, "%s", joined);
+}
+
 int paths_init(cocosession *s, const cocosession_paths *p)
 {
     if (p && p->config_dir && *p->config_dir)
@@ -255,6 +301,9 @@ int paths_init(cocosession *s, const cocosession_paths *p)
     else
         default_dir(s->data_dir, sizeof(s->data_dir), "XDG_DATA_HOME",
                     "LOCALAPPDATA", ".local/share");
+
+    make_absolute(s->config_dir, sizeof(s->config_dir));
+    make_absolute(s->data_dir, sizeof(s->data_dir));
 
     if (mkdir_p(s->config_dir) != 0 || mkdir_p(s->data_dir) != 0)
         return -1;
@@ -273,6 +322,8 @@ int paths_init(cocosession *s, const cocosession_paths *p)
         else
             snprintf(s->roms_dir, sizeof(s->roms_dir), "%s/roms", s->data_dir);
     }
+    /* COCO_ROM_DIR may well be relative -- see make_absolute. */
+    make_absolute(s->roms_dir, sizeof(s->roms_dir));
     mkdir_p(s->roms_dir);
     paths_materialise_roms(s);
 

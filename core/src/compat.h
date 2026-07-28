@@ -16,6 +16,12 @@
 #include <stdlib.h>
 #include <time.h>
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#else
+#include <unistd.h>
+#endif
+
 /* setenv() is POSIX; MSVCRT spells it _putenv_s. Same shim the FujiNet
  * firmware already carries in lib/clock/Clock.cpp. */
 static inline int coco_setenv(const char *name, const char *value)
@@ -24,6 +30,26 @@ static inline int coco_setenv(const char *name, const char *value)
     return _putenv_s(name, value);
 #else
     return setenv(name, value, 1);
+#endif
+}
+
+/* Sleep for a relative interval. Unlike coco_sleep_until_us this is for the
+ * "poll until something is ready" case, where there is no deadline to hold. */
+static inline void coco_sleep_ms(int ms)
+{
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
+/* Sockets are close() on POSIX and closesocket() on Winsock. */
+static inline void coco_closesocket(int fd)
+{
+#if defined(_WIN32)
+    closesocket((SOCKET)fd);
+#else
+    close(fd);
 #endif
 }
 

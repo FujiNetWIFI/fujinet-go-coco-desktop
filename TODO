@@ -62,6 +62,14 @@ Tests
   * boot_smoke -- writes the embedded ROMs to a scratch directory, starts the
     core headless, runs 120 frames and checks geometry, non-black pixels and
     that XRoar reported a frame rate. Skips (77) on WITH_COCO_ROMS=OFF.
+  * drivewire_smoke -- the end-to-end one. Starts a real session with the
+    in-process runtime and asserts (a) an OP_READ line in FujiNet's own log,
+    which can only appear if bytes crossed the loopback socket in BOTH
+    directions, and (b) that typing changes the screen. Both bugs above were
+    found by writing it; neither was visible from the outside. Skips (77) on
+    no ROMs, no libfujinet, or a Becker port someone else is holding -- and
+    says which, because a leftover standalone fujinet-pc-coco is the single
+    most confusing way for this to look broken.
   * no_embedded_roms.py -- registered per shipped binary when
     WITH_COCO_ROMS=OFF.
 
@@ -85,10 +93,24 @@ FujiNet runtime (M3)
     https:// fetch starts looking like a network fault). The Apple II port
     does not set it either; worth telling them.
 
+  * fujinet_wait_for_becker() -- start is NOT enough. main_setup() returns as
+    soon as the devices exist, but the DriveWire bus then logs "BoIPChannel:
+    No WiFi!" and suspends itself for a FULL SECOND before listening. HDB-DOS
+    boots in well under that, asks for its boot sector, gets nothing, and
+    hangs on the banner with no OK prompt -- which looks exactly like a
+    working emulator until you try to type. The session now probes the port
+    until it accepts before starting the machine.
+  * paths_init() resolves config/data/rom directories to absolute paths. The
+    FujiNet entry wrapper chdir()s into its runtime root, and on this target
+    FujiNet starts FIRST, so by the time XRoar resolves -rompath the CWD has
+    moved and a relative path silently finds nothing: "(unpopulated)" ROM
+    slots and a blank screen, with the files right there on disk.
+
 Verified by hand
   * The CoCo 3 boots to its banner; the vsync phase lock engages at 60/60
     frames on vsync, 0 behind (COCO_PACE_LOG=1).
-  * HDB-DOS reaches FujiNet's CONFIG over the Becker port.
+  * HDB-DOS reaches FujiNet's CONFIG over the Becker port, against both a
+    standalone fujinet-pc-coco and the in-process runtime.
   * Clone-and-build both ways (M2): a fresh tree with no third_party/, and a
     `git archive` export with no git metadata at all. Both download the pinned
     XRoar tarball, verify its SHA256, stage it and test green.
@@ -100,9 +122,8 @@ Next
 ----
 
 M4  Settings/media/gamepad/audio end-to-end (most of the code is written; this
-    is the pass that exercises it).
-
-M5  KDE frontend (early, to keep the core toolkit-agnostic).
+    is the pass that exercises it). Media import and the gamepad path are the
+    two with no test coverage at all yet.
 
 M6  Debugger. core/debugger/debugger.c and frontends/gnome/debugger/
     dbg_window.c are placeholders that say so rather than opening an empty

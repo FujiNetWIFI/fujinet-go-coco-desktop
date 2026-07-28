@@ -427,16 +427,20 @@ int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
      * connects in; here FujiNet is the DriveWire server that listens on the
      * Becker port and XRoar connects *out* to it.
      *
-     * XRoar's becker.c is patched to connect lazily and retry, so the wrong
-     * order is survivable rather than fatal -- but it costs the machine its
-     * first several seconds of DriveWire, right when HDB-DOS is looking for
-     * the boot device. Starting the listener first means the very first
-     * connect attempt succeeds. Encode the order; do not rely on the retry.
+     * And it is not enough to start it first: fujinet_start() returns as soon
+     * as the devices are constructed, but the DriveWire bus then suspends
+     * itself for a full second before it begins listening. HDB-DOS boots in
+     * well under that, asks for its boot sector, gets nothing, and HANGS on
+     * the banner with no OK prompt -- which looks exactly like a working
+     * emulator until you try to type. So wait for the listener to actually
+     * accept before starting the machine.
      *
      * A missing or broken runtime is not fatal: the machine still boots, just
-     * with nothing on the other end of the Becker port. */
-    if (opts->enable_fujinet)
-        fujinet_start(s);
+     * with nothing on the other end of the Becker port. Nor is a timeout --
+     * the patched becker.c keeps retrying, so the link comes up late rather
+     * than never. */
+    if (opts->enable_fujinet && fujinet_start(s) == 0)
+        fujinet_wait_for_becker(s, 10000);
 
     s->stop_flag = 0;
     s->frame_serial = 0;

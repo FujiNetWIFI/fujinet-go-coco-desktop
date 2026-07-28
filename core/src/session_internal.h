@@ -142,6 +142,10 @@ void cocodebug_resume_for_stop(cocodebug *d);
 
 /* fujinet_runtime.c */
 int  fujinet_start(cocosession *s);
+/* Block until FujiNet is actually accepting on the Becker port. Returns 0
+   when it is, -1 on timeout. See the definition for why start is not
+   enough. */
+int  fujinet_wait_for_becker(cocosession *s, int timeout_ms);
 void fujinet_stop(cocosession *s);
 int  fujinet_copy_log(cocosession *s, char *dst, int max);
 void fujinet_mix_audio(cocosession *s, int16_t *buf, int nsamples, int rate);
