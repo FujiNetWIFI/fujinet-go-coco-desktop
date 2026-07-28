@@ -1,0 +1,135 @@
+FujiNet Go CoCo (desktop) -- what is done and what is next
+==========================================================
+
+The port follows fujinet-go-adam-desktop/PORTING.md, whose §12 milestone
+order this file tracks. The derivation is
+
+    coco-desktop = (adam-desktop - adam-android) + coco-android
+
+with the Apple II port as the closer model (it already solved variable frame
+geometry, analog axes and the ROM-embedding gate).
+
+
+Done (this pass) -- M1
+----------------------
+
+Build system
+  * cmake/Dependencies.cmake -- coco_provide_dependency() with a new
+    ARCHIVE/SHA256 branch, because XRoar ships a release tarball rather than a
+    git repository. XRoar 1.11 and fujinet-firmware b9a27cfa1 are pinned.
+  * cmake/StageXRoar.cmake -- stages src/ + portalib/ + top-config.h into
+    core/xroar-generated, swaps in the lazy-connect becker.c, and runs
+    tools/xroar/patch-staged-tree.py. Re-stages when the source, the patch
+    script or the staging recipe changes; -DXROAR_RESTAGE=ON forces it.
+  * tools/xroar/patch-staged-tree.py -- generates config.h (headless
+    CoCo/Dragon feature set, host half resolved by the preprocessor) and
+    registers our ui/ao modules in src/ui.c and src/ao.c under
+    XROAR_DESKTOP_MODULES.
+  * cmake/FujiNetRuntime.cmake, cmake/toolchains/mingw-w64.cmake.
+  * WITH_COCO_ROMS gate + tools/xroar/embed-roms.py + the five ROM images.
+
+Core
+  * core/include/cocosession.h -- the frontend contract.
+  * core/xroar/coco_host.{c,h} -- the Android host, with android/log.h
+    replaced by a log-sink seam and a frame-rate sink added (the Android app
+    ignored XRoar's notify_frame_rate; the desktop pacer needs it). Plus
+    cocohost_release_all_keys() for focus loss.
+  * core/xroar/desktop/{ui,ao,joystick}_desktop.c -- the three XRoar modules.
+    ui_desktop.c uses VO_RENDER_FMT_ARGB8 (the explicit base format, never the
+    VO_RENDER_FMT_ARGB32 alias), so every frontend paints XRGB8888 with no
+    per-pixel conversion.
+  * core/src/session.c -- lifecycle and the paced emulator loop. FujiNet is
+    started BEFORE the emulator, which is the opposite of ADAM and Apple II
+    and follows from FujiNet being the one that listens here.
+  * core/src/input_map.c -- keysym -> XRoar hkbd scancode (USB HID usage
+    codes), positional via a US-layout unshift; and the 0..65535 analog axis
+    mapping with 32767 at centre.
+  * core/src/paths.c -- materialises the embedded ROMs into the user's ROM
+    directory, skipping names already present so an import always wins.
+  * core/src/gamepad_sdl.c -- reworked for the CoCo's TWO joystick ports
+    (first pad -> right, second -> left, explicit binding available).
+  * core/src/{settings,audio_sdl,fujinet_runtime,compat.h,dynlib.h}.c -- from
+    the Apple II port with the target-specific parts adjusted.
+
+Frontend
+  * frontends/gnome -- GTK4/libadwaita. Machine / Display / Artifact Colour as
+    live radio actions in the menu (the Display submenu is rebuilt on a machine
+    switch, which is what removes RGB on a CoCo 2), preferences over the shared
+    settings store, media and ROM import, FujiNet config + log windows.
+
+Tests
+  * input_test -- the pure mapping functions.
+  * boot_smoke -- writes the embedded ROMs to a scratch directory, starts the
+    core headless, runs 120 frames and checks geometry, non-black pixels and
+    that XRoar reported a frame rate. Skips (77) on WITH_COCO_ROMS=OFF.
+  * no_embedded_roms.py -- registered per shipped binary when
+    WITH_COCO_ROMS=OFF.
+
+Verified by hand
+  * The CoCo 3 boots to its banner; the vsync phase lock engages at 60/60
+    frames on vsync, 0 behind (COCO_PACE_LOG=1).
+  * HDB-DOS reaches FujiNet's CONFIG over the Becker port. NOTE: that was
+    against a *standalone* fujinet-pc-coco holding 65504, not the in-process
+    runtime -- which is M3, and which will need that process stopped first
+    (PORTING.md §10 item 20).
+
+
+Next
+----
+
+M2  Verify clone-and-build two ways, as the Apple II TODO records: a plain
+    `git clone` (no --recurse-submodules), and a tree with .git and
+    third_party/* removed. Both must download XRoar and stage it themselves.
+
+M3  FujiNet in-process (the long pole).
+    * tools/fujinet/build-fujinet-desktop.sh with PC_TARGET=COCO, the
+      11 target-independent patch blocks from the Apple II port, [BOIP]
+      port=65504, web UI 8002. The COCO/DriveWire bus needs no transport
+      transform (fujinet-go-coco/tools/fujinet/build-fujinet.sh:479 says so).
+    * tools/fujinet/support/fujinet_desktop_entry.cpp -- the six-symbol ABI.
+    * Expect a FRESH set of MinGW portability gaps in lib/device/drivewire/;
+      the Apple II port's uint/setenv patches will not be the right ones.
+    Done when the CoCo boots into HDB-DOS CONFIG over the *in-process*
+    runtime.
+
+M4  Settings/media/gamepad/audio end-to-end (most of the code is written; this
+    is the pass that exercises it).
+
+M5  KDE frontend (early, to keep the core toolkit-agnostic).
+
+M6  Debugger. core/debugger/debugger.c and frontends/gnome/debugger/
+    dbg_window.c are placeholders that say so rather than opening an empty
+    window. Build the engine on XRoar's struct debug_cpu (src/debug_cpu.h:
+    instruction_hook / instruction_posthook / get_pc / set_pc) and
+    src/breakpoint.c. Also core/debugger/m6809dasm.c and cocovideo.c (VDG
+    text/semigraphics/PMODE and the CoCo 3 GIME modes).
+
+M7  CI: linux, then macOS and Windows, then flatpak.
+
+M8  Icons, desktop entries, AppStream metainfo, screenshots.
+    (The GNOME .desktop and .metainfo.xml exist; the icon art does not, so
+    data/icons is still empty and the top-level install() rules for it have
+    nothing to install yet.)
+
+M9  Packaging + release job.
+
+M10 macOS and Windows frontends, remaining debugger windows, polish.
+
+
+Known issues / things to remember
+---------------------------------
+
+* src/path.c:194 hardcodes ':' as the rompath separator. On Windows that
+  collides with a drive letter. Deal with it at M10 (or send a fix upstream).
+* MinGW-w64 has no regex.h and portalib/sdsx.c needs one, reached from
+  src/path.c and src/xconfig.c. config.h already defines HAVE_TRE on _WIN32
+  and core/CMakeLists.txt links systre/tre; the Windows toolchain has to
+  provide them (see cmake/toolchains/mingw-w64.cmake).
+* Restarting a session calls xroar_shutdown() and then xroar_init() again.
+  The Android app never does this (it kills the process), so it is untested.
+  If it turns out XRoar cannot be re-initialised in one process, the fix is to
+  make the session's restart path rebuild the machine in place instead --
+  cocohost_set_machine() already does exactly that without re-init.
+* prefs.c casts g_free to GClosureNotify and gcc warns. Carried over from the
+  Apple II port, where it warns identically; it is a GLib API shape, not a
+  bug here.
