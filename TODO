@@ -144,12 +144,8 @@ Next
 ----
 
 
-M6 (in progress) The disassembler and the engine are done. Still open:
-      * The windows, in both frontends -- placeholders that say so today.
-        The engine's contract (core/include/cocodebug.h) is what they drive;
-        a UI polls cocodebug_stop_serial() on its frame clock and refreshes
-        when it changes, rather than being called back on the emulator
-        thread.
+M6 (in progress) The disassembler, the engine and both Linux debugger
+    windows are done. Still open:
       * core/debugger/cocovideo.c -- VDG text/semigraphics/PMODE and the
         CoCo 3 GIME modes, for the debugger's video pane.
       * 6309 opcodes. The disassembler API takes no CPU parameter yet;
@@ -159,6 +155,9 @@ M6 (in progress) The disassembler and the engine are done. Still open:
         is no equivalent shipped with XRoar, so this needs a source deciding
         first (HDB-DOS and Super Extended BASIC entry points would be the
         useful ones).
+      * A memory pane. cocodebug_read is there and tested; nothing shows it
+        yet.
+      * The macOS and Windows debugger windows, with those frontends (M10).
 
 M7  CI: linux, then macOS and Windows, then flatpak.
 
