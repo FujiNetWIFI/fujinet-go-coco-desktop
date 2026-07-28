@@ -332,6 +332,26 @@ static uint8_t dasm_read(uint16_t addr, void *user)
     return xroar.machine->read_byte(xroar.machine, addr, 0);
 }
 
+int cocodebug_disassemble(cocodebug *d, uint16_t addr, coco_dasm_line *out,
+                          int max)
+{
+    int n = 0;
+
+    if (!d || !out || max <= 0)
+        return 0;
+    /* Same rule as cocodebug_read, for the same reason: this walks the
+     * machine's memory, which is only still while it is parked. */
+    if (!d->paused)
+        return 0;
+
+    while (n < max) {
+        coco_dasm_one(addr, dasm_read, NULL, &out[n]);
+        addr = (uint16_t)(addr + out[n].len);
+        n++;
+    }
+    return n;
+}
+
 void cocodebug_step_over(cocodebug *d)
 {
     coco_dasm_line line;

@@ -24,6 +24,7 @@
 #include <stdint.h>
 
 #include "cocosession.h"
+#include "m6809dasm.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,6 +81,13 @@ int cocodebug_regs_get(cocodebug *d, cocodebug_regs *out);
  * so memory-mapped hardware and the CoCo 3's MMU behave as the CPU sees
  * them). Returns the number read. */
 int cocodebug_read(cocodebug *d, uint16_t addr, uint8_t *dst, int n);
+
+/* Disassembles up to `max` instructions starting at addr, walking forward by
+ * each one's length. Returns how many were produced -- 0 while running, since
+ * it reads the machine's memory. This is what a frontend fills its
+ * disassembly list from; it never has to know the encoding. */
+int cocodebug_disassemble(cocodebug *d, uint16_t addr, coco_dasm_line *out,
+                          int max);
 
 /* ---- breakpoints -------------------------------------------------------- */
 /* Returns 1 when the breakpoint is now set, 0 when it was cleared, -1 when
