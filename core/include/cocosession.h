@@ -34,10 +34,15 @@ extern "C" {
 #define COCOSESSION_FB_MAX_HEIGHT 300
 
 /* Becker-port (DriveWire-over-TCP) loopback port -- FujiNet listens here and
- * the emulator connects out -- and the FujiNet web admin port, both fixed to
- * match the Android app. */
+ * the emulator connects out -- fixed to match the Android app.
+ *
+ * The FujiNet web admin port is fixed too, but deliberately NOT the Android
+ * app's 8002: a standalone fujinet-pc-coco uses that, and anyone developing
+ * FujiNet has one running. The desktop targets each take a high port instead
+ * (ADAM 65214, Apple II 64001), so all three can run at once and none of them
+ * fights a standalone build. */
 #define COCOSESSION_BECKER_PORT 65504
-#define COCOSESSION_WEBUI_PORT  8002
+#define COCOSESSION_WEBUI_PORT  64002
 
 typedef struct cocosession cocosession;
 typedef struct cocodebug cocodebug;
