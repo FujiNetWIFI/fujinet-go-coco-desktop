@@ -78,6 +78,14 @@ static int becker_port_free(void)
     if (s >= 0) {
 #endif
         struct sockaddr_in addr;
+        int reuse = 1;
+        /* Without this, a listener that closed moments ago leaves the port in
+         * TIME_WAIT and bind() fails -- so the test would skip, reporting
+         * "something is already listening" when nothing is. A real LISTEN
+         * still refuses the bind, which is the case we actually want to
+         * detect. */
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse,
+                   sizeof(reuse));
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(COCOSESSION_BECKER_PORT);
