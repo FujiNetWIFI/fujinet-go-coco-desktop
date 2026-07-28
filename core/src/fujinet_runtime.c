@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "compat.h"
 #include "dynlib.h"
 #include "session_internal.h"
 
@@ -91,6 +92,14 @@ int fujinet_start(cocosession *s)
         pthread_mutex_unlock(&g_mtx);
         return -1;
     }
+    /* Two of the firmware patches (fnFsSPIFFS's flash base and mgHttpClient's
+     * CA bundle -- see tools/fujinet/build-fujinet-desktop.sh) root themselves
+     * from this rather than from the CWD, so that FujiNet keeps working if
+     * anything ever moves the process's working directory out from under it.
+     * Both fall back to a relative path when it is unset, which is why leaving
+     * it unset fails quietly rather than loudly: the CA store simply loads
+     * empty and every https:// fetch starts failing like a network fault. */
+    coco_setenv("FUJINET_RUNTIME_ROOT", s->fujinet_root);
     if (!g_start(s->fujinet_root, s->fujinet_config, s->fujinet_sd,
                  s->fujinet_data, COCOSESSION_BECKER_PORT)) {
         const char *err = g_last_error ? g_last_error() : NULL;

@@ -10,8 +10,8 @@ with the Apple II port as the closer model (it already solved variable frame
 geometry, analog axes and the ROM-embedding gate).
 
 
-Done (this pass) -- M1
-----------------------
+Done (this pass) -- M1, M2, M3
+------------------------------
 
 Build system
   * cmake/Dependencies.cmake -- coco_provide_dependency() with a new
@@ -65,32 +65,39 @@ Tests
   * no_embedded_roms.py -- registered per shipped binary when
     WITH_COCO_ROMS=OFF.
 
+FujiNet runtime (M3)
+  * tools/fujinet/build-fujinet-desktop.sh -- PC_TARGET=COCO, [BOIP] forced to
+    127.0.0.1:65504. All eleven of the Apple II script's patch blocks are
+    target-independent and applied unchanged; the COCO/DriveWire bus needs no
+    transport transform, because the Becker port is already plain DriveWire
+    over TCP. Built clean on the first attempt against fujinet-pc-coco
+    b9a27cfa1, exporting all six ABI symbols.
+  * tools/fujinet/support/fujinet_desktop_entry.cpp -- taken from the Apple II
+    *working tree* rather than its last commit, for the stop-with-timeout fix
+    (a device blocked on a socket call can miss the shutdown flag; detaching
+    after 5s beats hanging the host process on exit).
+  * Web admin on 64002, not the Android app's 8002: a standalone
+    fujinet-pc-coco uses 8002. ADAM has 65214 and Apple II 64001, so all three
+    desktop apps plus a standalone build can run at once.
+  * fujinet_runtime.c sets FUJINET_RUNTIME_ROOT before starting the runtime.
+    Two firmware patches root themselves from it and fall back to a relative
+    path when unset -- which fails quietly (the CA store loads empty and every
+    https:// fetch starts looking like a network fault). The Apple II port
+    does not set it either; worth telling them.
+
 Verified by hand
   * The CoCo 3 boots to its banner; the vsync phase lock engages at 60/60
     frames on vsync, 0 behind (COCO_PACE_LOG=1).
-  * HDB-DOS reaches FujiNet's CONFIG over the Becker port. NOTE: that was
-    against a *standalone* fujinet-pc-coco holding 65504, not the in-process
-    runtime -- which is M3, and which will need that process stopped first
-    (PORTING.md §10 item 20).
+  * HDB-DOS reaches FujiNet's CONFIG over the Becker port.
+  * Clone-and-build both ways (M2): a fresh tree with no third_party/, and a
+    `git archive` export with no git metadata at all. Both download the pinned
+    XRoar tarball, verify its SHA256, stage it and test green.
+  * Both ROM configurations: ctest green either way, and no_embedded_roms
+    fails loudly on a WITH_COCO_ROMS=ON binary, as it should.
 
 
 Next
 ----
-
-M2  Verify clone-and-build two ways, as the Apple II TODO records: a plain
-    `git clone` (no --recurse-submodules), and a tree with .git and
-    third_party/* removed. Both must download XRoar and stage it themselves.
-
-M3  FujiNet in-process (the long pole).
-    * tools/fujinet/build-fujinet-desktop.sh with PC_TARGET=COCO, the
-      11 target-independent patch blocks from the Apple II port, [BOIP]
-      port=65504, web UI 8002. The COCO/DriveWire bus needs no transport
-      transform (fujinet-go-coco/tools/fujinet/build-fujinet.sh:479 says so).
-    * tools/fujinet/support/fujinet_desktop_entry.cpp -- the six-symbol ABI.
-    * Expect a FRESH set of MinGW portability gaps in lib/device/drivewire/;
-      the Apple II port's uint/setenv patches will not be the right ones.
-    Done when the CoCo boots into HDB-DOS CONFIG over the *in-process*
-    runtime.
 
 M4  Settings/media/gamepad/audio end-to-end (most of the code is written; this
     is the pass that exercises it).

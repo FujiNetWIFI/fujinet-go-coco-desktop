@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FujiNet Go CoCo
+GenericName=Color Computer with FujiNet
+Comment=Self-contained Tandy Color Computer with built-in FujiNet
+Exec=fujinet-go-coco-kde
+Icon=online.fujinet.go.coco.kde
+Terminal=false
+Categories=Game;Emulator;
+Keywords=coco;colorcomputer;tandy;trs-80;dragon;xroar;drivewire;fujinet;emulator;
+StartupNotify=true
