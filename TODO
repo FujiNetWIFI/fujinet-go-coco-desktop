@@ -222,7 +222,31 @@ M6 (in progress) The disassembler (6809 and 6309), the engine, both Linux
     treat it as less trusted than the other three paths until something
     exercises it.
 
-M7  CI: linux, then macOS and Windows, then flatpak.
+M7 (in progress) CI: linux, then macOS and Windows, then flatpak.
+    .github/workflows/linux.yml: configure/build/ctest with WITH_COCO_ROMS=OFF
+    (the system ROMs are not redistributable, so CI never has them -- boot_
+    smoke, drivewire_smoke, debug and the two video_coco* tests correctly
+    report ctest's skip code there, the same as any WITH_COCO_ROMS=OFF build).
+    SDL3 is built from source and pinned to release-3.4.12 rather than
+    assumed to have an apt package on the runner image -- SDL3 is too new for
+    that to be a safe assumption, and this is the same "pin what matters"
+    policy as XRoar's SHA256 tarball and the FujiNet firmware's pinned
+    commit. Verified locally: a from-scratch WITH_COCO_ROMS=OFF configure
+    (using the system package manager's SDL3, not a from-source build -- that
+    exact recipe was already proven working on this machine, just not
+    re-run start to finish for this) builds both frontends and ctest greens
+    the 10 tests that run, skipping the 5 ROM-gated ones as expected. Not
+    yet verified: an actual GitHub Actions run -- apt package names
+    (libgtk-4-dev, libadwaita-1-dev, libwebkitgtk-6.0-dev, qt6-base-dev,
+    libqt6opengl6-dev, qt6-webengine-dev, and SDL3's own X11/Wayland build
+    dependencies) are believed correct for a current Ubuntu runner image but
+    unconfirmed without one.
+
+    Also fixed while validating this: third_party/fujinet-firmware/ (the
+    default clone location when FUJINET_SRC is not set to point at an
+    existing checkout) was not in .gitignore -- only third_party/xroar/ was.
+    A plain from-scratch `cmake -B build` -- exactly what CI does -- would
+    have left an untracked 3700+ file clone sitting in the working tree.
 
 M8  Icons, desktop entries, AppStream metainfo, screenshots.
     Desktop entries and metainfo exist for both Linux frontends. Icon art now
