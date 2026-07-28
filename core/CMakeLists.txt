@@ -280,6 +280,10 @@ target_link_libraries(boot_smoke cocosession)
 # can lay the ROMs down itself instead of depending on a provisioned session.
 target_include_directories(boot_smoke PRIVATE src)
 
+add_executable(debug_test tests/debug_test.c)
+target_link_libraries(debug_test cocosession)
+target_include_directories(debug_test PRIVATE src)
+
 add_executable(dasm_test tests/dasm_test.c)
 target_link_libraries(dasm_test cocosession)
 target_include_directories(dasm_test PRIVATE debugger)
@@ -294,12 +298,14 @@ target_include_directories(drivewire_smoke PRIVATE src)
 add_test(NAME input COMMAND input_test)
 add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
+add_test(NAME debug COMMAND debug_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME drivewire_smoke COMMAND drivewire_smoke)
 # Both need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;
 # drivewire_smoke additionally needs libfujinet and a free Becker port. All
 # three are reported as 77 rather than as failures.
-set_tests_properties(boot_smoke drivewire_smoke PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(boot_smoke drivewire_smoke debug
+                     PROPERTIES SKIP_RETURN_CODE 77)
 # It boots a machine, types at it and waits on real DriveWire traffic, so it
 # is the one test here that takes seconds rather than milliseconds. It also
 # binds a fixed port, so it must not run beside another copy of itself.

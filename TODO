@@ -79,6 +79,13 @@ Tests
     lists), plus a sweep over all 65536 two-byte openings asserting only that
     every one decodes to a usable length, so a disassembly list can never get
     stuck.
+  * debug_test -- the debugger engine against a real running machine, which
+    is the only way to test it: the design is that the emulator thread parks
+    inside XRoar's instruction_hook, so a mock would only prove the mock
+    works. Covers pause/step/breakpoints, that memory reads while parked are
+    stable across two reads (i.e. the machine really is stopped, not just
+    between frames), and that a session with the debugger PAUSED still tears
+    down rather than deadlocking on the parked thread.
   * no_embedded_roms.py -- registered per shipped binary when
     WITH_COCO_ROMS=OFF.
 
@@ -137,20 +144,21 @@ Next
 ----
 
 
-M6 (in progress) The 6809 disassembler is done -- core/debugger/m6809dasm.c,
-    with the opcode tables extracted mechanically from XRoar's
-    mc6809_trace.c rather than retyped, so they cannot drift by a typo.
-    Still open:
-      * The engine. core/debugger/debugger.c is still a placeholder. Build it
-        on XRoar's struct debug_cpu (src/debug_cpu.h: instruction_hook /
-        instruction_posthook / get_pc / set_pc) and src/breakpoint.c rather
-        than inventing a stepped core path.
+M6 (in progress) The disassembler and the engine are done. Still open:
+      * The windows, in both frontends -- placeholders that say so today.
+        The engine's contract (core/include/cocodebug.h) is what they drive;
+        a UI polls cocodebug_stop_serial() on its frame clock and refreshes
+        when it changes, rather than being called back on the emulator
+        thread.
       * core/debugger/cocovideo.c -- VDG text/semigraphics/PMODE and the
         CoCo 3 GIME modes, for the debugger's video pane.
-      * The windows, in both frontends (placeholders that say so today).
-      * 6309 opcodes. The API takes no CPU parameter yet; hd6309_trace.c has
-        the same table shape, so the same extraction works when a machine
-        config that selects a 6309 is offered.
+      * 6309 opcodes. The disassembler API takes no CPU parameter yet;
+        hd6309_trace.c has the same table shape, so the same mechanical
+        extraction works when a machine config selecting a 6309 is offered.
+      * Symbol tables. The Apple II port loads AppleWin's .SYM files; there
+        is no equivalent shipped with XRoar, so this needs a source deciding
+        first (HDB-DOS and Super Extended BASIC entry points would be the
+        useful ones).
 
 M7  CI: linux, then macOS and Windows, then flatpak.
 
