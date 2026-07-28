@@ -332,10 +332,23 @@ static uint8_t dasm_read(uint16_t addr, void *user)
     return xroar.machine->read_byte(xroar.machine, addr, 0);
 }
 
+/* Which opcode table to disassemble with. An HD6309 part_is_a()'s "MC6809"
+ * too (it really is one, extended), so the specific query has to come
+ * first: this asks "is it actually the 6309", not "is it 6809-compatible",
+ * which every CPU here would answer yes to. */
+static coco_dasm_cpu current_dasm_cpu(void)
+{
+    if (xroar.machine &&
+        part_component_by_id_is_a(&xroar.machine->part, "CPU", "HD6309"))
+        return COCO_DASM_CPU_HD6309;
+    return COCO_DASM_CPU_MC6809;
+}
+
 int cocodebug_disassemble(cocodebug *d, uint16_t addr, coco_dasm_line *out,
                           int max)
 {
     int n = 0;
+    coco_dasm_cpu cpu;
 
     if (!d || !out || max <= 0)
         return 0;
@@ -344,8 +357,9 @@ int cocodebug_disassemble(cocodebug *d, uint16_t addr, coco_dasm_line *out,
     if (!d->paused)
         return 0;
 
+    cpu = current_dasm_cpu();
     while (n < max) {
-        coco_dasm_one(addr, dasm_read, NULL, &out[n]);
+        coco_dasm_one_cpu(addr, dasm_read, NULL, cpu, &out[n]);
         addr = (uint16_t)(addr + out[n].len);
         n++;
     }
@@ -363,7 +377,7 @@ void cocodebug_step_over(cocodebug *d)
         return;
     }
 
-    coco_dasm_one(d->regs.pc, dasm_read, NULL, &line);
+    coco_dasm_one_cpu(d->regs.pc, dasm_read, NULL, current_dasm_cpu(), &line);
     if (!(line.flags & COCO_DASM_CALL)) {
         /* Not a call: stepping over it is just stepping. */
         cocodebug_step(d);

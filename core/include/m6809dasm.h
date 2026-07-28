@@ -54,13 +54,30 @@ typedef struct {
  * the disassembler never reads past the instruction it is decoding. */
 typedef uint8_t (*coco_dasm_read)(uint16_t addr, void *user);
 
-/* Decode one instruction at addr. Always fills out and always reports a
- * length of at least 1, so a caller walking a range cannot get stuck on an
- * illegal opcode. Returns the length. */
+typedef enum {
+    COCO_DASM_CPU_MC6809 = 0,
+    COCO_DASM_CPU_HD6309 = 1,
+} coco_dasm_cpu;
+
+/* Decode one instruction at addr for the given CPU. The HD6309 is a superset
+ * of the 6809 -- same three opcode pages (no prefix, $10, $11), but several
+ * previously-illegal slots and postbyte values become real instructions, so
+ * this genuinely needs to know which chip it is decoding for rather than
+ * just decoding "the union of both": a byte pattern a real 6809 would show
+ * as illegal must still show as illegal when that is the machine running.
+ * Always fills out and always reports a length of at least 1, so a caller
+ * walking a range cannot get stuck on an illegal opcode. Returns the
+ * length. */
+int coco_dasm_one_cpu(uint16_t addr, coco_dasm_read read, void *user,
+                      coco_dasm_cpu cpu, coco_dasm_line *out);
+
+/* Convenience for the common case: decode for a plain 6809. */
 int coco_dasm_one(uint16_t addr, coco_dasm_read read, void *user,
                   coco_dasm_line *out);
 
 /* Convenience for a flat buffer: `mem` is 64K of address space. */
 int coco_dasm_one_mem(uint16_t addr, const uint8_t *mem, coco_dasm_line *out);
+int coco_dasm_one_mem_cpu(uint16_t addr, const uint8_t *mem, coco_dasm_cpu cpu,
+                          coco_dasm_line *out);
 
 #endif /* COCO_M6809DASM_H */

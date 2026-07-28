@@ -144,16 +144,45 @@ Next
 ----
 
 
-M6 (in progress) The disassembler, the engine, both Linux debugger windows,
-    their memory panes and the video pane are done. Still open:
-      * 6309 opcodes. The disassembler API takes no CPU parameter yet;
-        hd6309_trace.c has the same table shape, so the same mechanical
-        extraction works when a machine config selecting a 6309 is offered.
+M6 (in progress) The disassembler (6809 and 6309), the engine, both Linux
+    debugger windows, their memory panes and the video pane are done. Still
+    open:
+      * A way to actually select/run a 6309-CPU machine. The disassembler
+        itself is fully HD6309-aware (see below) and cocodebug_disassemble()
+        already auto-detects a live 6309 via part_component_by_id_is_a(mp,
+        "CPU", "HD6309") -- but nothing offers a machine config with one:
+        no cocosession API, no coco_host.c live-switch wiring, no frontend
+        menu item. The mechanism is scoped and low-risk (both dragon.c and
+        coco3.c already support mc->cpu = CPU_HD6309, and XRoar's own
+        in-place CoCo2<->CoCo3 switch in coco_host.c's apply_pending_commands
+        already mutates a fetched machine_config in place before
+        xroar_hard_reset() the same way a CPU switch would) -- it is just
+        unimplemented, deliberately deferred as its own follow-up rather
+        than bundled into the disassembler work.
       * Symbol tables. The Apple II port loads AppleWin's .SYM files; there
         is no equivalent shipped with XRoar, so this needs a source deciding
         first (HDB-DOS and Super Extended BASIC entry points would be the
         useful ones).
       * The macOS and Windows debugger windows, with those frontends (M10).
+
+    core/debugger/m6809dasm.c's HD6309 support is a second, complete opcode
+    table (hd6309_instructions[3][256], mechanically extracted from
+    src/mc6809/hd6309_trace.c the same way the original 6809 table was from
+    mc6809_trace.c -- about 40% of the 768 slots differ, so a verbatim
+    transplant stays re-extractable without hand-merging a diff) plus every
+    addressing mode the 6809 does not have: INMEM_DIRECT/INDEXED/EXTENDED
+    (OIM/AIM/EIM/TIM), MEMBIT (the B{AND,OR,EOR} family), QUAD_IMMEDIATE
+    (LDQ), the four TFM postbyte variants, a 16-entry TFR/EXG register table
+    (the 6809's leaves six slots undefined), and three new indexed
+    accumulator offsets (E/F/W) filling postbyte nibbles the 6809 leaves
+    illegal -- plus a handful of full-postbyte values HD6309 hijacks
+    specifically to mean ",W" addressing. coco_dasm_one_cpu() takes an
+    explicit coco_dasm_cpu now; coco_dasm_one() is a thin 6809-default
+    wrapper so existing callers are unchanged. The property the whole
+    two-table design exists for -- a byte pattern only valid on one chip
+    must decode as illegal on the other, not as "whatever either chip
+    supports" -- has its own dasm_test cases, and the existing 65536-opening
+    sweep now runs for both chips.
 
     The memory pane is a 16x16 hex+ASCII dump under the disassembly/register
     row, with an address entry and Go button (GtkEntry / QLineEdit) to jump
