@@ -225,9 +225,16 @@ M6 (in progress) The disassembler (6809 and 6309), the engine, both Linux
 M7  CI: linux, then macOS and Windows, then flatpak.
 
 M8  Icons, desktop entries, AppStream metainfo, screenshots.
-    (The GNOME .desktop and .metainfo.xml exist; the icon art does not, so
-    data/icons is still empty and the top-level install() rules for it have
-    nothing to install yet.)
+    Desktop entries and metainfo exist for both Linux frontends. Icon art now
+    too: tools/icons/make-icons.py composites fujinet-go-coco's (the Android
+    app's) xxxhdpi adaptive icon layers -- background + foreground, already
+    safe-zone padded -- into the same circular badge its flattened
+    ic_launcher.png uses, then renders every hicolor size CMakeLists.txt
+    installs (16..512) into data/icons/hicolor/. It is a one-shot dev tool
+    (takes the Android checkout's res/ dir as an argument) rather than a
+    build step, since the source Android checkout is not expected to be
+    present for everyone building this repo; the rendered PNGs are committed.
+    Screenshots for the metainfo still to do.
 
 M9  Packaging + release job.
 
