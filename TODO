@@ -144,10 +144,8 @@ Next
 ----
 
 
-M6 (in progress) The disassembler, the engine, both Linux debugger windows
-    and their memory panes are done. Still open:
-      * core/debugger/cocovideo.c -- VDG text/semigraphics/PMODE and the
-        CoCo 3 GIME modes, for the debugger's video pane.
+M6 (in progress) The disassembler, the engine, both Linux debugger windows,
+    their memory panes and the video pane are done. Still open:
       * 6309 opcodes. The disassembler API takes no CPU parameter yet;
         hd6309_trace.c has the same table shape, so the same mechanical
         extraction works when a machine config selecting a 6309 is offered.
@@ -163,6 +161,37 @@ M6 (in progress) The disassembler, the engine, both Linux debugger windows
     the already-tested cocodebug_read. Verified by hand in both frontends via
     COCO_OPEN_DEBUGGER=1 (window.c / MainWindow.cpp's developer affordance
     that opens the debugger alongside the main window at startup).
+
+    core/debugger/cocovideo.c decodes the screen from scratch -- alpha/
+    SG4/SG6/CG/RG for a real CoCo 1/2 (VDG + SAM), plus a CoCo 3's GIME in
+    both its VDG-compatible and native text/graphics modes -- entirely
+    independent of XRoar's own live renderer, since none of that renderer's
+    mode state is exposed publicly. Two things had no other way to reach:
+      * GIME's video mode/palette-selector registers are, per real GIME
+        hardware, write-only even through the CPU's own bus, and XRoar's
+        TCC1014 keeps them in a private struct with no getter. Fixed with a
+        small read-only tcc1014_get_debug_state() added to the *vendored*
+        XRoar source by tools/xroar/patch-staged-tree.py (job 3), the same
+        way that script already patches src/ui.c and src/ao.c -- so it
+        survives a re-stage instead of being lost.
+      * GIME fetches video RAM directly from physical memory, bypassing the
+        CPU's MMU entirely -- a 19-bit video address is not a CPU-visible
+        16-bit one, and reading it via cocodebug_read (the normal, MMU-aware
+        CPU bus path) silently returns the wrong bytes once the MMU state
+        diverges from the hardwired identity mapping XRoar resets into. No
+        patch needed for this one: struct ram (ram.h) and its ram_a8() are
+        already public, so gime_vram_read() reaches physical RAM directly,
+        the same way coco3.c's own fetch_vram() does.
+    Both bugs were invisible to a plain "is the screen not one flat colour"
+    check and were only caught by dumping the decoded buffer to a PPM and
+    looking at it -- video_test's two ctest cases (video_coco3, video_coco2)
+    keep the flat-colour check as a cheap regression guard, but a real
+    content change needs eyes on a real frame.
+    GIME's *native* mode (COCO=0) is implemented from the same register map
+    but has no automated or by-hand visual verification yet -- the default
+    boot state never reaches it (GIME resets into VDG-compatible mode) -- so
+    treat it as less trusted than the other three paths until something
+    exercises it.
 
 M7  CI: linux, then macOS and Windows, then flatpak.
 

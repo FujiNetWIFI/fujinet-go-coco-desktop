@@ -16,19 +16,23 @@
 
 #include <QFontDatabase>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
 #include <QShortcut>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QVector>
 
 #include <utility>
 
 #include "cocodebug.h"
+#include "cocovideo.h"
 
 namespace {
 
@@ -44,7 +48,8 @@ constexpr int kMemRows = 16;
 class DebuggerDialog : public QWidget {
 public:
     DebuggerDialog(QWidget *parent, cocodebug *dbg)
-        : QWidget(parent, Qt::Window), m_dbg(dbg)
+        : QWidget(parent, Qt::Window), m_dbg(dbg),
+          m_videoBuf((size_t)COCOVIDEO_MAX_WIDTH * COCOVIDEO_MAX_HEIGHT, 0)
     {
         setWindowTitle(QStringLiteral("Debugger"));
         resize(680, 760);
@@ -88,11 +93,23 @@ public:
                 });
         panes->addWidget(m_disasm, 1);
 
+        auto *sidebar = new QVBoxLayout;
         m_regs = new QLabel(this);
         m_regs->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
         m_regs->setAlignment(Qt::AlignTop | Qt::AlignLeft);
         m_regs->setMinimumWidth(200);
-        panes->addWidget(m_regs);
+        sidebar->addWidget(m_regs);
+
+        m_video = new QLabel(this);
+        m_video->setAlignment(Qt::AlignCenter);
+        m_video->setMinimumSize(256, 192);
+        /* Distinct from m_regs's dark theme -- video content is meant to be
+         * seen against black the way the machine's own screen is, not
+         * whatever the app's palette happens to be. */
+        m_video->setStyleSheet(QStringLiteral("background-color: black;"));
+        sidebar->addWidget(m_video, 1);
+
+        panes->addLayout(sidebar);
         outer->addLayout(panes, 1);
 
         auto *memBar = new QHBoxLayout;
@@ -199,6 +216,7 @@ private:
              * so clear it rather than leave a stale snapshot looking live. */
             m_regs->clear();
             m_mem->clear();
+            m_video->clear();
             return;
         }
 
@@ -266,6 +284,23 @@ private:
                 dump += QLatin1Char('\n');
         }
         m_mem->setText(dump);
+
+        int vw = 0, vh = 0;
+        if (cocodebug_video_decode(m_dbg, m_videoBuf.data(), &vw, &vh) &&
+            vw > 0 && vh > 0) {
+            /* A view over the packed buffer: rows are vw pixels apart, same
+             * XRGB8888 -> Format_RGB32 convention as DisplayWidget's own
+             * paintGL(). Scaled to fit rather than shown 1:1 -- native
+             * resolution varies a lot between modes (a CoCo 1/2 canvas is a
+             * fixed 256x192, a CoCo 3 GIME mode can be much wider). */
+            const QImage frame((const uchar *)m_videoBuf.data(), vw, vh,
+                               vw * 4, QImage::Format_RGB32);
+            m_video->setPixmap(QPixmap::fromImage(frame).scaled(
+                m_video->size(), Qt::KeepAspectRatio,
+                Qt::SmoothTransformation));
+        } else {
+            m_video->clear();
+        }
     }
 
     static QString hex8(uint8_t v)
@@ -288,10 +323,12 @@ private:
     cocodebug *m_dbg;
     QLabel *m_status = nullptr;
     QLabel *m_regs = nullptr;
+    QLabel *m_video = nullptr;
     QLabel *m_mem = nullptr;
     QLineEdit *m_memAddr = nullptr;
     QListWidget *m_disasm = nullptr;
     QPushButton *m_runPause = nullptr;
+    QVector<uint32_t> m_videoBuf;
     uint64_t m_seenSerial = 0;
     bool m_wasPaused = false;
     uint16_t m_memViewAddr = 0;

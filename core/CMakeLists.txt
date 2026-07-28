@@ -241,6 +241,7 @@ add_library(cocosession STATIC
   src/fujinet_runtime.c
   debugger/debugger.c
   debugger/m6809dasm.c
+  debugger/cocovideo.c
   "${COCO_ROMS_C}"
 )
 
@@ -295,16 +296,24 @@ add_executable(drivewire_smoke tests/drivewire_smoke.c)
 target_link_libraries(drivewire_smoke cocosession)
 target_include_directories(drivewire_smoke PRIVATE src)
 
+add_executable(video_test tests/video_test.c)
+target_link_libraries(video_test cocosession)
+target_include_directories(video_test PRIVATE src)
+
 add_test(NAME input COMMAND input_test)
 add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME debug COMMAND debug_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME drivewire_smoke COMMAND drivewire_smoke)
-# Both need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;
+# One process per machine -- see video_test.c for why the same binary is
+# registered twice rather than looping over both machines in one process.
+add_test(NAME video_coco3 COMMAND video_test coco3)
+add_test(NAME video_coco2 COMMAND video_test coco2)
+# All need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;
 # drivewire_smoke additionally needs libfujinet and a free Becker port. All
-# three are reported as 77 rather than as failures.
-set_tests_properties(boot_smoke drivewire_smoke debug
+# are reported as 77 rather than as failures.
+set_tests_properties(boot_smoke drivewire_smoke debug video_coco3 video_coco2
                      PROPERTIES SKIP_RETURN_CODE 77)
 # It boots a machine, types at it and waits on real DriveWire traffic, so it
 # is the one test here that takes seconds rather than milliseconds. It also

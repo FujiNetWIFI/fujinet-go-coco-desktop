@@ -5,7 +5,7 @@ Run by cmake/StageXRoar.cmake against core/xroar-generated after the copy:
 
     patch-staged-tree.py <staged-root> <xroar-version>
 
-Two jobs:
+Three jobs:
 
   1. Generate `config.h`. XRoar normally gets this from its autotools
      configure; we are not running configure, so we write the headless
@@ -17,6 +17,18 @@ Two jobs:
      ahead of the null modules. Both transforms are idempotent and hard-fail on
      a missing anchor, so a version bump that moves the anchor text is a build
      error rather than a silently unregistered module.
+
+  3. Add a small read-only accessor to the GIME (TCC1014) part, for the
+     debugger's video pane (core/debugger/cocovideo.c). Unlike the SAM
+     (struct MC6883's public get_register()) and PIA1 (struct MC6821 is
+     fully public), GIME's video mode state -- text/graphics, resolution,
+     colour depth, border, scroll, video base address -- lives in
+     TCC1014_private with no public getter and, per real GIME hardware, is
+     mostly write-only even through the CPU's own bus (see the comment this
+     patch's anchor sits next to). Everything else the debugger needs (MMU
+     banks, the palette) already is a plain CPU-readable register, so this
+     is the one gap: a getter that copies the handful of fields cocovideo.c
+     cannot get any other way into a plain public struct.
 
 Everything is written back as UTF-8 with surrogateescape and no newline
 translation: Python on Windows otherwise decodes these sources as cp1252 and
@@ -230,6 +242,89 @@ def register_modules(root: Path) -> None:
     ])
 
 
+# --- 3. GIME debug accessor -------------------------------------------------
+
+GIME_DEBUG_STATE_H = """
+// Added by tools/xroar/patch-staged-tree.py for the desktop port's debugger
+// video pane (core/debugger/cocovideo.c). GIME's video mode registers are
+// write-only even on real hardware -- see tcc1014.c's own comment on the
+// $FF90-$FF9F read path -- so there is no way to recover this state through
+// cocodebug_read() the way screen RAM itself can be. This is a plain copy of
+// the handful of TCC1014_private fields the video pane needs; it is not a
+// general debug API and deliberately exposes no more than that.
+struct tcc1014_debug_state {
+	_Bool COCO;    // 1 = VDG/SAM compatible mode, 0 = GIME native
+	_Bool BP;      // 1 = graphics, 0 = text (native mode only)
+	_Bool MOCH;    // 1 = monochrome
+	unsigned LPR;  // VMODE lines-per-row selector, 0-7
+	unsigned LPF;  // VRES lines-per-field selector, 0-3
+	unsigned HRES; // VRES bytes-per-row/resolution selector, 0-7
+	unsigned CRES; // VRES colour-depth / text-attribute-enable selector, 0-3
+	uint8_t BRDR;  // border colour, palette index 0-63
+	unsigned VSC;  // vertical scroll, 0-15
+	uint32_t Y;    // video base address (VOFF, 8-byte granularity)
+	unsigned X;    // horizontal offset (HOFF)
+	_Bool HVEN;    // horizontal virtual screen enable
+	uint8_t SAM_V; // GIME's emulated SAM V register (COCO mode addressing)
+	uint16_t SAM_F; // GIME's emulated SAM F register (COCO mode video base)
+};
+
+void tcc1014_get_debug_state(struct TCC1014 *, struct tcc1014_debug_state *);
+
+#endif
+"""
+
+GIME_DEBUG_STATE_C = """
+void tcc1014_get_debug_state(struct TCC1014 *gimep, struct tcc1014_debug_state *out) {
+	struct TCC1014_private *gime = (struct TCC1014_private *)gimep;
+	out->COCO = gime->COCO;
+	out->BP = gime->BP;
+	out->MOCH = gime->MOCH;
+	out->LPR = gime->LPR;
+	out->LPF = gime->LPF;
+	out->HRES = gime->HRES;
+	out->CRES = gime->CRES;
+	out->BRDR = gime->BRDR;
+	out->VSC = gime->VSC;
+	out->Y = gime->Y;
+	out->X = gime->X;
+	out->HVEN = gime->HVEN;
+	out->SAM_V = gime->SAM_V;
+	out->SAM_F = gime->SAM_F;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+// GIME register writes
+"""
+
+
+def add_gime_debug_accessor(root: Path) -> None:
+    patch(root, "src/tcc1014/tcc1014.h", [
+        (
+            "void tcc1014_set_composite(struct TCC1014 *, _Bool);\n\n#endif\n",
+            "void tcc1014_set_composite(struct TCC1014 *, _Bool);\n"
+            + GIME_DEBUG_STATE_H,
+        ),
+    ])
+
+    patch(root, "src/tcc1014/tcc1014.c", [
+        (
+            "void tcc1014_set_composite(struct TCC1014 *gimep, _Bool value) {\n"
+            "\tstruct TCC1014_private *gime = (struct TCC1014_private *)gimep;\n"
+            "\tgime->want_composite = value;\n"
+            "}\n\n"
+            "// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\n\n"
+            "// GIME register writes\n",
+            "void tcc1014_set_composite(struct TCC1014 *gimep, _Bool value) {\n"
+            "\tstruct TCC1014_private *gime = (struct TCC1014_private *)gimep;\n"
+            "\tgime->want_composite = value;\n"
+            "}\n"
+            + GIME_DEBUG_STATE_C,
+        ),
+    ])
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         fail("usage: patch-staged-tree.py <staged-root> <xroar-version>")
@@ -241,11 +336,13 @@ def main() -> None:
 
     generate_config_h(root, version)
     register_modules(root)
+    add_gime_debug_accessor(root)
 
     # Record what the transforms produced, so a human comparing two staged
     # trees can tell whether the difference is upstream's or ours.
     digest = hashlib.sha256()
-    for rel in ("config.h", "src/ui.c", "src/ao.c", "src/becker.c"):
+    for rel in ("config.h", "src/ui.c", "src/ao.c", "src/becker.c",
+                "src/tcc1014/tcc1014.h", "src/tcc1014/tcc1014.c"):
         digest.update(read(root / rel).encode("utf-8", "surrogateescape"))
     print(f"XRoar {version} staged; transforms sha256 {digest.hexdigest()[:16]}")
 

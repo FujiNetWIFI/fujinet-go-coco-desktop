@@ -20,6 +20,7 @@
 #include <stdlib.h>
 
 #include "cocodebug.h"
+#include "cocovideo.h"
 
 /* How much disassembly to show. The list is rebuilt on every stop, so this is
  * a screenful and a bit rather than a scrollback. */
@@ -38,15 +39,29 @@ typedef struct {
     GtkLabel *status;
     GtkListBox *disasm;
     GtkLabel *regs;
+    GtkPicture *video;
     GtkLabel *mem;
     GtkEntry *mem_addr;
     GtkButton *run_pause;
+
+    /* Heap-allocated: COCOVIDEO_MAX_WIDTH*HEIGHT is too big for a GObject
+     * instance, same reasoning as CocoDisplay's own frame buffer. */
+    uint32_t *video_buf;
 
     guint tick_id;
     uint64_t seen_serial;
     int was_paused;
     uint16_t mem_view_addr;
 } DebuggerUI;
+
+/* The core's XRGB8888 is a uint32 0x00RRGGBB, so on a little-endian host the
+ * bytes run B,G,R,X -- GDK_MEMORY_B8G8R8X8, no per-pixel conversion. Same
+ * format CocoDisplay uses (frontends/gnome/display.c) for the same reason. */
+#if G_BYTE_ORDER == G_BIG_ENDIAN
+#define COCO_GDK_FORMAT GDK_MEMORY_X8R8G8B8
+#else
+#define COCO_GDK_FORMAT GDK_MEMORY_B8G8R8X8
+#endif
 
 /* One live window at a time: a second one would fight the first over the same
  * engine, and there is nothing useful to see twice. */
@@ -176,6 +191,26 @@ static void refresh_mem(DebuggerUI *ui)
     g_string_free(text, TRUE);
 }
 
+static void refresh_video(DebuggerUI *ui)
+{
+    int w = 0, h = 0;
+    GBytes *bytes;
+    GdkTexture *texture;
+
+    if (!cocodebug_video_decode(ui->dbg, ui->video_buf, &w, &h) ||
+        w <= 0 || h <= 0) {
+        gtk_picture_set_paintable(ui->video, NULL);
+        return;
+    }
+
+    bytes = g_bytes_new(ui->video_buf, (gsize)w * (gsize)h * sizeof(uint32_t));
+    texture = gdk_memory_texture_new(w, h, COCO_GDK_FORMAT, bytes,
+                                     (gsize)w * sizeof(uint32_t));
+    g_bytes_unref(bytes);
+    gtk_picture_set_paintable(ui->video, GDK_PAINTABLE(texture));
+    g_object_unref(texture);
+}
+
 static void refresh(DebuggerUI *ui)
 {
     const int paused = cocodebug_is_paused(ui->dbg);
@@ -187,12 +222,14 @@ static void refresh(DebuggerUI *ui)
         refresh_regs(ui);
         refresh_disasm(ui);
         refresh_mem(ui);
+        refresh_video(ui);
     } else {
         /* Everything on show is only valid while parked, so clear it rather
          * than leave a stale snapshot that looks live. */
         gtk_label_set_text(ui->regs, "");
         gtk_list_box_remove_all(ui->disasm);
         gtk_label_set_text(ui->mem, "");
+        gtk_picture_set_paintable(ui->video, NULL);
     }
     ui->was_paused = paused;
 }
@@ -300,6 +337,7 @@ static void on_closed(GtkWindow *window, gpointer user_data)
      * would look like the emulator had hung. */
     cocodebug_set_engaged(ui->dbg, 0);
     g_ui = NULL;
+    g_free(ui->video_buf);
     g_free(ui);
 }
 
@@ -341,6 +379,8 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     ui = g_new0(DebuggerUI, 1);
     ui->session = session;
     ui->dbg = dbg;
+    ui->video_buf = g_malloc0((gsize)COCOVIDEO_MAX_WIDTH *
+                              COCOVIDEO_MAX_HEIGHT * sizeof(uint32_t));
     g_ui = ui;
 
     ui->window = GTK_WINDOW(adw_window_new());
@@ -390,11 +430,22 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     gtk_label_set_xalign(ui->regs, 0.0f);
     gtk_label_set_yalign(ui->regs, 0.0f);
     gtk_widget_add_css_class(GTK_WIDGET(ui->regs), "monospace");
-    regbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    regbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     gtk_widget_set_margin_start(regbox, 12);
     gtk_widget_set_margin_end(regbox, 12);
     gtk_widget_set_margin_top(regbox, 6);
     gtk_box_append(GTK_BOX(regbox), GTK_WIDGET(ui->regs));
+
+    ui->video = GTK_PICTURE(gtk_picture_new());
+    /* CONTAIN: letterbox rather than distort -- modes vary in aspect (a
+     * CoCo 1/2 canvas is fixed 256x192, a CoCo 3 GIME native mode can be
+     * much wider), and squashing either to fill the pane would misrepresent
+     * what is actually on screen. */
+    gtk_picture_set_content_fit(ui->video, GTK_CONTENT_FIT_CONTAIN);
+    gtk_picture_set_can_shrink(ui->video, TRUE);
+    gtk_widget_set_size_request(GTK_WIDGET(ui->video), 256, 192);
+    gtk_widget_set_vexpand(GTK_WIDGET(ui->video), TRUE);
+    gtk_box_append(GTK_BOX(regbox), GTK_WIDGET(ui->video));
 
     panes = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_append(GTK_BOX(panes), scroller);
