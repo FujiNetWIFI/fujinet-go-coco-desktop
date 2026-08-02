@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Render the app icon at every hicolor size from the Android app's launcher art.
+"""Render the desktop icon set from the shared FujiNet Go CoCo launcher art.
 
-Usage: make-icons.py <path-to-fujinet-go-coco>/app/src/main/res
+The artwork is the Android app's adaptive icon: a transparent foreground
+(data/icons/src/fujinet-go-coco-foreground.png, copied verbatim from
+fujinet-go-coco/app/src/main/res/mipmap-xxxhdpi/ic_launcher_adaptive_fore.png)
+over the flat brand background colour, so the desktop app and the Android app
+are visibly the same product. Android applies the rounded mask at runtime; on
+the desktop the mask has to be baked in, so this composites the two into a
+rounded square and writes every hicolor size the desktop environments look
+for, plus the macOS .icns the AppKit bundle uses. Same shape as the sibling
+adam/apple2 desktop repos' icon tooling -- rounded square, not the circular
+badge this repo used to bake in, so all three products read as one family.
 
-fujinet-go-coco (the Android app) is a sibling checkout, not part of this
-repository, so its path is an argument rather than assumed.
+The results are committed (data/icons/hicolor/..., data/icons/*.icns) so
+building the project needs no image tooling; re-run this only when the
+artwork changes:
 
-Composites the xxxhdpi adaptive icon layers -- ic_launcher_adaptive_back.png
-and ic_launcher_adaptive_fore.png, 432x432, already safe-zone padded by
-Android's own icon tooling -- rather than upscaling the small (192x192)
-flattened ic_launcher.png, so the largest installed size (512) is a mild
-upscale from 432 instead of a soft one from 192. Masked to the same circular
-badge ic_launcher.png itself uses, so the desktop icon matches the launcher
-icon Android users already recognize.
-
-Output: data/icons/hicolor/<size>x<size>/apps/fujinet-go-coco.png, for every
-size CMakeLists.txt installs. Committed to the repo like any other asset --
-this is a one-shot dev tool, not a build step, so the source Android checkout
-does not need to be present for anyone else to build this repo.
+    python3 tools/icons/make-icons.py
 """
 
 import sys
@@ -25,50 +24,69 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-SIZES = [16, 24, 32, 48, 64, 128, 192, 256, 512]
-CANVAS = 432
-# Matches ic_launcher.png's own proportions: the flattened legacy icon is a
-# circle with a small margin, not edge-to-edge.
-CIRCLE_FRACTION = 0.92
+ROOT = Path(__file__).resolve().parents[2]
+FOREGROUND = ROOT / "data/icons/src/fujinet-go-coco-foreground.png"
+OUTDIR = ROOT / "data/icons/hicolor"
+ICNS_OUT = ROOT / "data/icons/fujinet-go-coco.icns"
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+BACKGROUND = (0x8B, 0xC3, 0x4A, 0xFF)   # values/colors.xml: ic_launcher_background
+MASTER = 1024                            # render big, downsample with LANCZOS
+CORNER_RADIUS = 0.22                     # fraction of the edge
+FOREGROUND_ZOOM = 1.18                   # Android's mask crops; compensate a little
+SIZES = (16, 24, 32, 48, 64, 128, 192, 256, 512)
+ICNS_SIZES = (32, 64, 128, 256, 512, 1024)  # every size macOS's icns TOC references
 
 
-def main() -> None:
-    if len(sys.argv) != 2:
-        sys.exit(f"usage: {sys.argv[0]} <path-to-fujinet-go-coco>/app/src/main/res")
-    res_dir = Path(sys.argv[1])
-    back = res_dir / "mipmap-xxxhdpi" / "ic_launcher_adaptive_back.png"
-    fore = res_dir / "mipmap-xxxhdpi" / "ic_launcher_adaptive_fore.png"
-    for p in (back, fore):
-        if not p.exists():
-            sys.exit(f"make-icons.py: {p} not found")
+def render_master() -> Image.Image:
+    art = Image.open(FOREGROUND).convert("RGBA")
 
-    bg = Image.open(back).convert("RGBA")
-    fg = Image.open(fore).convert("RGBA")
-    if bg.size != (CANVAS, CANVAS) or fg.size != (CANVAS, CANVAS):
-        sys.exit(f"make-icons.py: expected {CANVAS}x{CANVAS} adaptive icon "
-                 f"layers, got {bg.size} / {fg.size}")
+    # Rounded-square background on a transparent canvas, drawn at 4x and
+    # downsampled so the corners are antialiased.
+    scale = 4
+    big = Image.new("RGBA", (MASTER * scale, MASTER * scale), (0, 0, 0, 0))
+    ImageDraw.Draw(big).rounded_rectangle(
+        (0, 0, MASTER * scale - 1, MASTER * scale - 1),
+        radius=int(MASTER * scale * CORNER_RADIUS),
+        fill=BACKGROUND,
+    )
+    icon = big.resize((MASTER, MASTER), Image.LANCZOS)
 
-    flat = Image.alpha_composite(bg, fg)
+    art_size = int(MASTER * FOREGROUND_ZOOM)
+    art = art.resize((art_size, art_size), Image.LANCZOS)
+    offset = (MASTER - art_size) // 2
+    overlay = Image.new("RGBA", (MASTER, MASTER), (0, 0, 0, 0))
+    overlay.paste(art, (offset, offset), art)
 
-    # The background layer is opaque everywhere, so compositing alone gives
-    # a square with no transparency -- the circular badge comes entirely
-    # from replacing the alpha channel with this mask.
-    mask = Image.new("L", (CANVAS, CANVAS), 0)
-    d = CANVAS * CIRCLE_FRACTION
-    off = (CANVAS - d) / 2
-    ImageDraw.Draw(mask).ellipse([off, off, off + d, off + d], fill=255)
-    flat.putalpha(mask)
+    # Keep the foreground inside the rounded silhouette.
+    composed = Image.alpha_composite(icon, overlay)
+    composed.putalpha(Image.composite(composed.getchannel("A"),
+                                      Image.new("L", (MASTER, MASTER), 0),
+                                      icon.getchannel("A")))
+    return composed
 
+
+def main() -> int:
+    if not FOREGROUND.exists():
+        print(f"missing artwork: {FOREGROUND}", file=sys.stderr)
+        return 1
+
+    master = render_master()
     for size in SIZES:
-        out_dir = REPO_ROOT / "data" / "icons" / "hicolor" / f"{size}x{size}" / "apps"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        resized = flat.resize((size, size), Image.Resampling.LANCZOS)
-        out_path = out_dir / "fujinet-go-coco.png"
-        resized.save(out_path)
-        print(f"wrote {out_path}")
+        out = OUTDIR / f"{size}x{size}" / "apps" / "fujinet-go-coco.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        master.resize((size, size), Image.LANCZOS).save(out, optimize=True)
+        print(f"wrote {out.relative_to(ROOT)}")
+
+    # Pillow's ICNS writer works on any platform (no iconutil needed): it
+    # just packs PNGs into the icns TOC. Pass every non-master size in
+    # explicitly, LANCZOS-downsampled from the 1024 master like the hicolor
+    # set above, so nothing gets a blurry re-resize from a smaller source.
+    variants = [master.resize((size, size), Image.LANCZOS)
+                for size in ICNS_SIZES if size != master.width]
+    master.save(ICNS_OUT, format="ICNS", append_images=variants)
+    print(f"wrote {ICNS_OUT.relative_to(ROOT)}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
