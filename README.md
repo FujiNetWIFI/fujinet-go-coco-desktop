@@ -1,5 +1,10 @@
 # FujiNet Go CoCo — desktop
 
+[![Linux](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/linux.yml/badge.svg)](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/linux.yml)
+[![macOS](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/macos.yml/badge.svg)](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/macos.yml)
+[![Windows](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/windows.yml/badge.svg)](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/windows.yml)
+[![Flatpak](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/flatpak.yml/badge.svg)](https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/actions/workflows/flatpak.yml)
+
 A self-contained Tandy Color Computer with FujiNet built in. One shared C
 session core plus four native frontends: GTK4/libadwaita on GNOME, Qt6 Widgets
 on KDE, AppKit on macOS and Win32 on Windows.
@@ -19,12 +24,41 @@ This is the third member of the FujiNet Go desktop family;
 is the model repository, and its `PORTING.md` is the specification this
 follows.
 
-> **Status: in progress (M1 of 10).** The core and the GNOME frontend are up:
-> a CoCo 3 or CoCo 2 boots, paced to display vsync, with keyboard input, live
-> machine / TV-input / artifact-colour switching, disk and ROM import, and
-> gamepads on both analog joystick ports. The in-process FujiNet runtime, the
-> KDE / macOS / Windows frontends, the 6809 debugger, CI and packaging are
-> still to come. See `TODO`.
+| Frontend | Toolkit | Binary | Status |
+|---|---|---|---|
+| GNOME | GTK4 + libadwaita (+ WebKitGTK) | `fujinet-go-coco-gnome` | complete |
+| KDE | Qt6 Widgets (+ QtWebEngine) | `fujinet-go-coco-kde` | complete |
+| macOS | AppKit (+ WKWebView) | `FujiNet Go CoCo.app` | complete (incl. debugger + bundled FujiNet) |
+| Windows | Win32 (GDI + DwmFlush) | `fujinet-go-coco-windows.exe` | complete (incl. debugger + bundled FujiNet) |
+
+The maintainer develops on Linux without Mac or Windows hardware: those
+builds are compiled, tested and packaged on CI's macOS and Windows runners,
+and reports from real users on those platforms are very welcome.
+
+## Features
+
+- CoCo 2 / CoCo 3 emulation (a headless build of XRoar), phase-locked to
+  your display's vsync whenever a ~60 Hz frame clock is available,
+  wall-clock paced otherwise. Live machine, TV input, artifact-colour and
+  CPU (6809/HD6309) switching, all without a session restart.
+- In-process FujiNet: disk mounting from TNFS hosts or the local SD folder,
+  and network config through the embedded FujiNet web UI (`FujiNet ▸
+  Configuration`), plus a live console-log window.
+- Automatic gamepad support with hotplug (SDL3) driving the analog
+  joystick ports.
+- Import disk images into the FujiNet SD folder; Import System ROMs… for
+  the Tandy firmware this project does not (and cannot) ship — see
+  "CoCo system ROMs" below.
+- Settings/Preferences windows (GNOME, KDE, macOS ⌘,, Windows) for aspect
+  ratio, smooth scaling, FujiNet enable and gamepad enable.
+
+### Developer debugger (F12)
+
+Breakpoints, pause/step into/over/out, run-to, a 6809/HD6309 disassembler,
+memory and register views, a decoded video pane, and symbol loading:
+LWASM's `--symbol-dump` format, plus a small built-in table of Color BASIC
+ROM entry points (`POLCAT`, `CHROUT`, `CSRDON`, …). Available in every
+frontend — GTK, Qt, AppKit and Win32 — over the one shared engine.
 
 ## Building
 
