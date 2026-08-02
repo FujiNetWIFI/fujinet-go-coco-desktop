@@ -253,7 +253,7 @@ M6 (in progress) The disassembler (6809 and 6309), the engine, both Linux
     treat it as less trusted than the other three paths until something
     exercises it.
 
-M7 (part) CI: linux, macOS and Windows done, flatpak still open.
+M7 (done) CI: linux, macOS, Windows and flatpak.
     .github/workflows/linux.yml: configure/build/ctest with WITH_COCO_ROMS=OFF
     (the system ROMs are not redistributable, so CI never has them -- boot_
     smoke, drivewire_smoke, debug and the two video_coco* tests correctly
@@ -344,6 +344,36 @@ M7 (part) CI: linux, macOS and Windows done, flatpak still open.
     itself; none are Windows-specific hacks bolted on top -- they teach the
     shared staging/generation step what MinGW-w64 actually needs, the same
     place every other cross-platform difference already lives.
+
+    build-aux/flatpak/online.fujinet.go.coco.{gnome,kde}.yml + .github/
+    workflows/flatpak.yml: two self-contained manifests (GNOME on
+    org.gnome.Platform//49, KDE on org.kde.Platform//6.11 -- KDE drops the
+    embedded web view, QtWebEngine's whole-Chromium base app being a poor
+    trade for the CONFIG page a browser tab already opens fine via the
+    OpenURI portal), adapted from fujinet-go-adam-desktop's proven pattern
+    (same sdl3/mbedtls/python3-webui-deps modules; CoCo has no equivalent to
+    adamcore, so the main module's sources are just this tree plus the
+    pinned XRoar tarball -- as a flatpak `type: archive` source, exactly
+    what cmake/Dependencies.cmake's own comment already anticipated -- and
+    the pinned fujinet-firmware commit, kept in step with
+    cmake/Dependencies.cmake by hand). `-DWITH_COCO_ROMS=OFF` is baked into
+    both manifests, per COMPLIANCE.md.
+
+    Built and installed locally with flatpak-builder (both runtimes and
+    SDKs were already present on this machine) on the first try for both
+    manifests, no fixes needed; `flatpak run` on each booted the emulator,
+    correctly reported the CoCo 3 ROM slot unpopulated (WITH_COCO_ROMS=OFF
+    doing its job), and brought FujiNet up over the Becker port exactly like
+    the native builds do.
+
+    The CI job (matrix over both manifests) does NOT use flathub-infra's
+    prebuilt gnome-NN/kde-N.NN build containers: at the time this was
+    written that image set only went up to kde-6.10, one version behind
+    what this project is actually pinned to and already runs locally, so
+    the workflow installs plain `flatpak`/`flatpak-builder` and pulls the
+    runtime + SDK straight from Flathub instead -- slower, no cross-run
+    cache, but it is exactly the recipe already verified locally rather
+    than a second untested path.
 
 M8  Icons, desktop entries, AppStream metainfo, screenshots.
     Desktop entries and metainfo exist for both Linux frontends. Icon art now
