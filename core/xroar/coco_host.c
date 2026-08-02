@@ -330,6 +330,22 @@ void cocohost_set_machine(int machine, int tv_input) {
     atomic_store(&g_pending_machine, machine);
 }
 
+/* --- CPU switch, in-place (COCO_CPU_*) -------------------------------------
+ * g_current_cpu mirrors the last CPU actually applied -- by cocohost_core_
+ * start or a prior cocohost_set_cpu -- so an in-place *machine* switch can
+ * reapply it to the newly selected machine_config too (each named config
+ * keeps its own struct machine_config::cpu, defaulted to CPU_MC6809, so
+ * switching machines would otherwise silently drop back to 6809). */
+static int cpu_xroar(int cpu) {
+    return (cpu == COCO_CPU_HD6309) ? CPU_HD6309 : CPU_MC6809;
+}
+static atomic_int g_current_cpu = COCO_CPU_MC6809;
+static atomic_int g_pending_cpu = -1;
+
+void cocohost_set_cpu(int cpu) {
+    atomic_store(&g_pending_cpu, cpu);
+}
+
 void cocohost_core_reset(void) {
     atomic_store(&g_pending_reset, 1);
 }
@@ -363,6 +379,15 @@ static void apply_pending_commands(void) {
         xroar_hard_reset();
     }
 
+    /* CPU pending: latch it into g_current_cpu now so the machine-switch
+     * branch below (if also pending this tick) reapplies it to the newly
+     * selected config, rather than the switch's own hard reset picking up
+     * whatever that config's cpu field was last left at. */
+    int cpu_sw = atomic_exchange(&g_pending_cpu, -1);
+    if (cpu_sw >= 0) {
+        atomic_store(&g_current_cpu, cpu_sw);
+    }
+
     /* In-place machine switch (CoCo 2 <-> CoCo 3): no xroar re-init. */
     int sw = atomic_exchange(&g_pending_machine, -1);
     if (sw >= 0) {
@@ -374,6 +399,7 @@ static void apply_pending_commands(void) {
         struct cart_config *cc = cart_config_by_name("becker");
         if (mc) {
             if (cc) { free(cc->rom); cc->rom = strdup(rom); }
+            mc->cpu = cpu_xroar(atomic_load(&g_current_cpu));
             LOGI("in-place machine switch -> %s (becker rom %s)", name, rom);
             ui_update_state(-1, ui_tag_machine, mc->id, NULL);
             if (cc) ui_update_state(-1, ui_tag_cartridge, cc->id, NULL);
@@ -382,6 +408,16 @@ static void apply_pending_commands(void) {
             ui_update_state(-1, ui_tag_tv_input, tvv, NULL);
         } else {
             LOGE("machine '%s' not found for in-place switch", name);
+        }
+    } else if (cpu_sw >= 0) {
+        /* CPU-only switch: same in-place trick, applied to whichever machine
+         * is currently selected rather than switching to a named one. */
+        struct machine_config *mc = xroar.machine_config;
+        if (mc) {
+            mc->cpu = cpu_xroar(cpu_sw);
+            LOGI("in-place cpu switch -> %s",
+                 cpu_sw == COCO_CPU_HD6309 ? "HD6309" : "MC6809");
+            xroar_hard_reset();
         }
     }
 }
@@ -413,7 +449,7 @@ static void setup_joysticks(void) {
 static double g_tickerr = 0.0;
 static int g_started = 0;
 
-int cocohost_core_start(int machine, int tv_input, int ccr) {
+int cocohost_core_start(int machine, int tv_input, int ccr, int cpu) {
     if (g_started) {
         LOGW("cocohost_core_start ignored; already started");
         return 1;
@@ -425,6 +461,7 @@ int cocohost_core_start(int machine, int tv_input, int ccr) {
     /* tv-input selects the artifact mode (cmp = S-Video/no artifacts,
      * cmp-br / cmp-rb = composite artifact phases, rgb = CoCo 3 RGB). */
     const char *tv_name = tv_input_arg(tv_input);
+    const char *cpu_name = (cpu == COCO_CPU_HD6309) ? "6309" : "6809";
 
     /* argv strings must outlive xroar_init; keep them in this static frame. */
     static char a_rompath[1024];
@@ -444,6 +481,7 @@ int cocohost_core_start(int machine, int tv_input, int ccr) {
     argv[argc++] = "-ao";        argv[argc++] = "desktop";
     argv[argc++] = "-rompath";   argv[argc++] = a_rompath;
     argv[argc++] = "-machine";   argv[argc++] = machine_name;
+    argv[argc++] = "-machine-cpu"; argv[argc++] = cpu_name;
     argv[argc++] = "-tv-input";  argv[argc++] = tv_name;
     /* RS-DOS with Becker port: auto-loads HDB-DOS (@rsdos_becker = hdbdw3bck). */
     argv[argc++] = "-cart";      argv[argc++] = "becker";
@@ -455,8 +493,8 @@ int cocohost_core_start(int machine, int tv_input, int ccr) {
     argv[argc++] = "-becker-ip";   argv[argc++] = a_ip;
     argv[argc++] = "-becker-port"; argv[argc++] = a_port;
 
-    LOGI("xroar_init machine=%s tv=%s becker=%s:%s rompath=%s",
-         machine_name, tv_name, a_ip, a_port, a_rompath);
+    LOGI("xroar_init machine=%s tv=%s cpu=%s becker=%s:%s rompath=%s",
+         machine_name, tv_name, cpu_name, a_ip, a_port, a_rompath);
 
     struct ui_interface *ui = xroar_init(argc, (char **)argv);
     if (!ui) {
@@ -468,6 +506,7 @@ int cocohost_core_start(int machine, int tv_input, int ccr) {
     /* Apply the composite cross-colour (artifact) renderer. */
     ui_update_state(-1, ui_tag_ccr, ccr_xroar(ccr), NULL);
 
+    atomic_store(&g_current_cpu, cpu);
     g_tickerr = 0.0;
     g_started = 1;
     return 1;

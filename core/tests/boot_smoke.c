@@ -118,7 +118,8 @@ int main(void)
 
     if (!cocohost_core_start(COCOSESSION_MACHINE_COCO3,
                              COCOSESSION_TV_COMPOSITE_BR,
-                             COCOSESSION_CCR_5BIT)) {
+                             COCOSESSION_CCR_5BIT,
+                             COCOSESSION_CPU_MC6809)) {
         fprintf(stderr, "boot_smoke: core failed to start\n");
         return 1;
     }

@@ -145,25 +145,34 @@ Next
 
 
 M6 (in progress) The disassembler (6809 and 6309), the engine, both Linux
-    debugger windows, their memory panes and the video pane are done. Still
-    open:
-      * A way to actually select/run a 6309-CPU machine. The disassembler
-        itself is fully HD6309-aware (see below) and cocodebug_disassemble()
-        already auto-detects a live 6309 via part_component_by_id_is_a(mp,
-        "CPU", "HD6309") -- but nothing offers a machine config with one:
-        no cocosession API, no coco_host.c live-switch wiring, no frontend
-        menu item. The mechanism is scoped and low-risk (both dragon.c and
-        coco3.c already support mc->cpu = CPU_HD6309, and XRoar's own
-        in-place CoCo2<->CoCo3 switch in coco_host.c's apply_pending_commands
-        already mutates a fetched machine_config in place before
-        xroar_hard_reset() the same way a CPU switch would) -- it is just
-        unimplemented, deliberately deferred as its own follow-up rather
-        than bundled into the disassembler work.
+    debugger windows, their memory panes and the video pane are done. Live
+    6309 machine selection is done too. Still open:
       * Symbol tables. The Apple II port loads AppleWin's .SYM files; there
         is no equivalent shipped with XRoar, so this needs a source deciding
         first (HDB-DOS and Super Extended BASIC entry points would be the
         useful ones).
       * The macOS and Windows debugger windows, with those frontends (M10).
+
+    Live CPU switching: cocosession_set_cpu()/cocosession_cpu() (core/
+    include/cocosession.h), COCOSESSION_CPU_MC6809/HD6309, wired through
+    coco_host.c's cocohost_set_cpu() the same way the existing in-place
+    CoCo2<->CoCo3 machine switch works -- mutate the running machine_
+    config's cpu field, xroar_hard_reset() in place, no xroar re-init. Unlike
+    the machine switch, this touches neither the TV input nor the cartridge
+    ROM. -machine-cpu is also passed at initial xroar_init() (coco_host.c's
+    cpu_name), so a session can boot straight into 6309 from a persisted
+    setting rather than needing a switch after start. A CPU-only switch and
+    an in-place machine switch queued in the same tick would otherwise race
+    on which one's hard reset sees the new cpu value; g_current_cpu in
+    coco_host.c is the fix, mirroring whichever was applied most recently so
+    the machine-switch branch reapplies it to the newly selected config.
+    Frontend menu items in both GNOME (win.cpu radio action) and KDE (the
+    View > CPU submenu) list cocosession_cpu_name()'s two entries, matching
+    the Machine/Display/Artifact Colour submenus' pattern. core/tests/
+    cpu_switch_test.c boots a CoCo 3, switches live to 6309 and back,
+    confirming both survive (the debugger's disassembler auto-detecting the
+    live part each time via current_dasm_cpu(), unchanged) -- skips (77)
+    without system ROMs, like debug_test and the video tests.
 
     core/debugger/m6809dasm.c's HD6309 support is a second, complete opcode
     table (hd6309_instructions[3][256], mechanically extracted from

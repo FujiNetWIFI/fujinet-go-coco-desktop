@@ -94,6 +94,17 @@ enum {
     COCOSESSION_MACHINE_COCO2 = 1, /* Color Computer 2 (VDG) */
 };
 
+/* CPU: both machine types support either core, since real CoCo 2s and 3s
+ * both shipped with a socketed 6809 that some owners swapped for a Hitachi
+ * 6309. HD6309 is XRoar's own upstream label ("Hitachi 6309 - UNVERIFIED" in
+ * its enum help text) for its less-tested extended-mode emulation, not a
+ * claim this port makes about its own disassembler support -- that part
+ * (core/debugger/m6809dasm.c) is complete and independently tested. */
+enum {
+    COCOSESSION_CPU_MC6809 = 0, /* Motorola 6809 (default) */
+    COCOSESSION_CPU_HD6309 = 1, /* Hitachi 6309, extended mode */
+};
+
 /* TV input, i.e. how the machine's video reaches the display. This is what
  * decides whether artifact colour happens at all, and in which phase. */
 enum {
@@ -117,6 +128,7 @@ enum {
 const char *cocosession_machine_name(int idx);
 const char *cocosession_tv_input_name(int idx);
 const char *cocosession_ccr_name(int idx);
+const char *cocosession_cpu_name(int idx);
 
 /* 1 when the TV input is selectable on that machine. RGB exists only on the
  * CoCo 3, so a frontend showing the CoCo 2's menu must filter it out. */
@@ -127,6 +139,7 @@ typedef struct {
     int machine;   /* COCOSESSION_MACHINE_* */
     int tv_input;  /* COCOSESSION_TV_* */
     int ccr;       /* COCOSESSION_CCR_* */
+    int cpu;       /* COCOSESSION_CPU_* */
     int enable_fujinet; /* start the in-process FujiNet runtime */
     int enable_audio;   /* open the SDL audio device */
     int enable_gamepad; /* start the SDL gamepad thread */
@@ -157,9 +170,14 @@ const char *cocosession_last_error(const cocosession *s);
 void cocosession_set_machine(cocosession *s, int machine);
 void cocosession_set_tv_input(cocosession *s, int tv_input);
 void cocosession_set_ccr(cocosession *s, int ccr);
+/* Unlike the machine switch, this does not touch the TV input or cartridge
+ * ROM -- it only swaps which CPU part the (unchanged) machine is built with,
+ * then hard-resets in place. */
+void cocosession_set_cpu(cocosession *s, int cpu);
 int  cocosession_machine(const cocosession *s);
 int  cocosession_tv_input(const cocosession *s);
 int  cocosession_ccr(const cocosession *s);
+int  cocosession_cpu(const cocosession *s);
 
 /* ---- video ---------------------------------------------------------------
  * The emulator thread stores the latest changed frame; the UI thread pulls it

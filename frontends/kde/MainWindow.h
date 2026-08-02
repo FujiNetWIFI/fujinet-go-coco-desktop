@@ -33,4 +33,5 @@ private:
     QMenu *m_tvInputMenu = nullptr;
     QActionGroup *m_tvInputGroup = nullptr;
     QActionGroup *m_machineGroup = nullptr;
+    QActionGroup *m_cpuGroup = nullptr;
 };

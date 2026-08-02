@@ -210,6 +210,26 @@ void MainWindow::buildMenus()
         });
     }
 
+    /* CPU: both machine types support either core (a real CoCo's 6809 was
+     * socketed), so this switches in place without touching the machine, TV
+     * input or cartridge ROM. */
+    QMenu *cpuMenu = view->addMenu(QStringLiteral("CP&U"));
+    m_cpuGroup = new QActionGroup(this);
+    m_cpuGroup->setExclusive(true);
+    for (int i = 0; const char *name = cocosession_cpu_name(i); i++) {
+        QAction *act = cpuMenu->addAction(QString::fromUtf8(name));
+        act->setCheckable(true);
+        act->setChecked(i == cocosession_cpu(m_session));
+        m_cpuGroup->addAction(act);
+        connect(act, &QAction::triggered, this, [this, i] {
+            cocosession_set_cpu(m_session, i);
+            status(QStringLiteral("%1 (reset)")
+                       .arg(QString::fromUtf8(cocosession_cpu_name(
+                           cocosession_cpu(m_session)))));
+            m_display->setFocus();
+        });
+    }
+
     view->addSeparator();
     view->addAction(QStringLiteral("&Debugger"), QKeySequence(Qt::Key_F12),
                     this, [this] { DebuggerWindow::show(this, m_session); });

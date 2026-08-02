@@ -164,6 +164,7 @@ int main(void)
     ok("the machine table ends", cocosession_machine_name(2) == NULL);
     ok("the TV input table ends", cocosession_tv_input_name(4) == NULL);
     ok("the artifact table ends", cocosession_ccr_name(5) == NULL);
+    ok("the cpu table ends", cocosession_cpu_name(2) == NULL);
     ok("a CoCo 3 has an RGB connector",
        cocosession_tv_input_supported(COCOSESSION_MACHINE_COCO3,
                                       COCOSESSION_TV_RGB));
@@ -191,6 +192,23 @@ int main(void)
     ok("a nonsense artifact mode is clamped",
        cocosession_ccr_name(cocosession_ccr(s)) != NULL);
 
+    /* CPU is independent of machine: unlike the TV input, nothing about it
+     * gets carried or refused when the machine changes. */
+    ok("the default cpu is 6809", cocosession_cpu(s) == COCOSESSION_CPU_MC6809);
+    cocosession_set_cpu(s, COCOSESSION_CPU_HD6309);
+    ok("6309 is accepted", cocosession_cpu(s) == COCOSESSION_CPU_HD6309);
+    cocosession_set_machine(s, COCOSESSION_MACHINE_COCO3);
+    ok("switching machine does not disturb the cpu selection",
+       cocosession_cpu(s) == COCOSESSION_CPU_HD6309);
+    /* Restore what the earlier RGB-carry checks left selected, so the
+     * persistence check below (after reopening the session) still sees the
+     * machine it expects. */
+    cocosession_set_machine(s, COCOSESSION_MACHINE_COCO2);
+    cocosession_set_cpu(s, 99);
+    ok("a nonsense cpu is clamped",
+       cocosession_cpu_name(cocosession_cpu(s)) != NULL);
+    cocosession_set_cpu(s, COCOSESSION_CPU_MC6809);
+
     /* --- the shared settings store -------------------------------------- */
     cocosession_set_int(s, "session_test_int", 42);
     cocosession_set_str(s, "session_test_str", "hello");
@@ -211,6 +229,8 @@ int main(void)
        s && strcmp(cocosession_get_str(s, "session_test_str", ""), "hello") == 0);
     ok("...and so does the machine selection",
        s && cocosession_machine(s) == COCOSESSION_MACHINE_COCO2);
+    ok("...and the cpu selection",
+       s && cocosession_cpu(s) == COCOSESSION_CPU_MC6809);
     if (s) cocosession_free(s);
 
     if (failures) {

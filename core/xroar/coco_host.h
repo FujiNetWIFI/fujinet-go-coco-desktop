@@ -44,6 +44,13 @@ enum {
     COCO_MACHINE_COCO2 = 1,  /* xroar -machine coco2bus, becker ROM hdbdw3bck */
 };
 
+/* CPU selection (xroar -machine-cpu). Independent of machine: both machine
+ * configs support either core. */
+enum {
+    COCO_CPU_MC6809 = 0,
+    COCO_CPU_HD6309 = 1,
+};
+
 /* TV input / artifact mode (values match XRoar TV_INPUT_*). */
 enum {
     COCO_TV_SVIDEO = 0,        /* S-Video: clean, no artifact colours */
@@ -92,9 +99,9 @@ void cocohost_set_becker_endpoint(const char *ip, int port);
 
 /* --- core lifecycle (call on the emulator thread) ------------------------ */
 /* Builds argv and runs xroar_init()/xroar_init_finish(). machine is
- * COCO_MACHINE_*, tv_input is COCO_TV_*, ccr is COCO_CCR_*. Returns 0 on
- * failure. */
-int  cocohost_core_start(int machine, int tv_input, int ccr);
+ * COCO_MACHINE_*, tv_input is COCO_TV_*, ccr is COCO_CCR_*, cpu is
+ * COCO_CPU_*. Returns 0 on failure. */
+int  cocohost_core_start(int machine, int tv_input, int ccr, int cpu);
 void cocohost_core_run_frame(void);  /* advances one ~60Hz frame */
 void cocohost_core_stop(void);
 void cocohost_core_reset(void);      /* queued hard reset */
@@ -111,6 +118,12 @@ void cocohost_set_ccr(int ccr);
  * thread, with the matching HDB-DOS Becker ROM. FujiNet stays up; becker
  * reconnects. */
 void cocohost_set_machine(int machine, int tv_input);
+
+/* Live CPU switch (COCO_CPU_*): mutates the running machine_config's cpu
+ * field and hard-resets in place, the same trick as cocohost_set_machine but
+ * without touching the machine, TV input or cartridge ROM. Applied on the
+ * emulator thread. */
+void cocohost_set_cpu(int cpu);
 
 /* --- audio -----------------------------------------------------------------
  * ao_desktop pushes completed interleaved stereo S16 frames (44100 Hz). */

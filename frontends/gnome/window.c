@@ -178,6 +178,19 @@ static void action_ccr(GSimpleAction *action, GVariant *param,
                                   cocosession_ccr(self->session)));
 }
 
+static void action_cpu(GSimpleAction *action, GVariant *param,
+                       gpointer user_data)
+{
+    CocoWindow *self = COCO_WINDOW(user_data);
+    g_autofree char *msg = NULL;
+    cocosession_set_cpu(self->session, g_variant_get_int32(param));
+    g_simple_action_set_state(action, g_variant_new_int32(
+                                  cocosession_cpu(self->session)));
+    msg = g_strdup_printf("%s (reset)", cocosession_cpu_name(
+                              cocosession_cpu(self->session)));
+    coco_window_toast(self, msg);
+}
+
 static void import_done(GObject *source, GAsyncResult *result,
                         gpointer user_data)
 {
@@ -387,6 +400,9 @@ static GMenu *build_menu(cocosession *session)
     sub = radio_menu("win.ccr", cocosession_ccr_name, NULL, 0);
     g_menu_append_submenu(view, "Artifact Colour", G_MENU_MODEL(sub));
     g_object_unref(sub);
+    sub = radio_menu("win.cpu", cocosession_cpu_name, NULL, 0);
+    g_menu_append_submenu(view, "CPU", G_MENU_MODEL(sub));
+    g_object_unref(sub);
     g_menu_append(view, "Debugger (F12)", "win.debugger");
     g_menu_append_section(menu, "View", G_MENU_MODEL(view));
 
@@ -474,6 +490,8 @@ GtkWidget *coco_window_new(AdwApplication *app, cocosession *session)
                      G_CALLBACK(action_tv_input));
     add_radio_action(self, "ccr", cocosession_ccr(session),
                      G_CALLBACK(action_ccr));
+    add_radio_action(self, "cpu", cocosession_cpu(session),
+                     G_CALLBACK(action_cpu));
 
     header = ADW_HEADER_BAR(adw_header_bar_new());
     self->menu_button = GTK_MENU_BUTTON(gtk_menu_button_new());

@@ -70,6 +70,9 @@ static const char *const k_tv_inputs[] = {
 static const char *const k_ccrs[] = {
     "None", "Simple (2-bit)", "5-bit", "Partial NTSC", "Simulated NTSC", NULL
 };
+static const char *const k_cpus[] = {
+    "Motorola 6809", "Hitachi 6309 (experimental)", NULL
+};
 
 static const char *table_at(const char *const *tab, int idx)
 {
@@ -82,6 +85,7 @@ static const char *table_at(const char *const *tab, int idx)
 const char *cocosession_machine_name(int idx)  { return table_at(k_machines, idx); }
 const char *cocosession_tv_input_name(int idx) { return table_at(k_tv_inputs, idx); }
 const char *cocosession_ccr_name(int idx)      { return table_at(k_ccrs, idx); }
+const char *cocosession_cpu_name(int idx)      { return table_at(k_cpus, idx); }
 
 int cocosession_tv_input_supported(int machine, int tv_input)
 {
@@ -245,7 +249,7 @@ static void *emu_thread_main(void *arg)
 
     {
         int ok = cocohost_core_start(s->opts.machine, s->opts.tv_input,
-                                     s->opts.ccr);
+                                     s->opts.ccr, s->opts.cpu);
         if (!ok) {
             if (!roms_present_for_machine(s->roms_dir, s->opts.machine))
                 session_set_error(s,
@@ -372,6 +376,7 @@ cocosession *cocosession_new(const cocosession_paths *paths)
         s->cur_machine = opts.machine;
         s->cur_tv_input = opts.tv_input;
         s->cur_ccr = opts.ccr;
+        s->cur_cpu = opts.cpu;
     }
     return s;
 }
@@ -406,6 +411,8 @@ void cocosession_default_opts(cocosession *s, cocosession_start_opts *opts)
                                k_tv_inputs, COCOSESSION_TV_COMPOSITE_BR);
     opts->ccr = clamp_opt(cocosession_get_int(s, "ccr", COCOSESSION_CCR_5BIT),
                           k_ccrs, COCOSESSION_CCR_5BIT);
+    opts->cpu = clamp_opt(cocosession_get_int(s, "cpu", COCOSESSION_CPU_MC6809),
+                          k_cpus, COCOSESSION_CPU_MC6809);
     if (!cocosession_tv_input_supported(opts->machine, opts->tv_input))
         opts->tv_input = COCOSESSION_TV_COMPOSITE_BR;
     opts->enable_fujinet = cocosession_get_int(s, "enable_fujinet", 1) ? 1 : 0;
@@ -427,11 +434,13 @@ int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
     s->opts.ccr = clamp_opt(opts->ccr, k_ccrs, COCOSESSION_CCR_5BIT);
     s->opts.tv_input = clamp_opt(opts->tv_input, k_tv_inputs,
                                  COCOSESSION_TV_COMPOSITE_BR);
+    s->opts.cpu = clamp_opt(opts->cpu, k_cpus, COCOSESSION_CPU_MC6809);
     if (!cocosession_tv_input_supported(s->opts.machine, s->opts.tv_input))
         s->opts.tv_input = COCOSESSION_TV_COMPOSITE_BR;
     s->cur_machine = s->opts.machine;
     s->cur_tv_input = s->opts.tv_input;
     s->cur_ccr = s->opts.ccr;
+    s->cur_cpu = s->opts.cpu;
 
     /* FUJINET MUST BE UP BEFORE THE EMULATOR.
      *
@@ -596,9 +605,20 @@ void cocosession_set_ccr(cocosession *s, int ccr)
         cocohost_set_ccr(ccr);
 }
 
+void cocosession_set_cpu(cocosession *s, int cpu)
+{
+    if (!s) return;
+    cpu = clamp_opt(cpu, k_cpus, COCOSESSION_CPU_MC6809);
+    s->cur_cpu = cpu;
+    cocosession_set_int(s, "cpu", cpu);
+    if (s->running)
+        cocohost_set_cpu(cpu);
+}
+
 int cocosession_machine(const cocosession *s)  { return s ? s->cur_machine : 0; }
 int cocosession_tv_input(const cocosession *s) { return s ? s->cur_tv_input : 0; }
 int cocosession_ccr(const cocosession *s)      { return s ? s->cur_ccr : 0; }
+int cocosession_cpu(const cocosession *s)      { return s ? s->cur_cpu : 0; }
 
 /****************************************************************************/
 /** Input / audio / misc accessors                                         **/

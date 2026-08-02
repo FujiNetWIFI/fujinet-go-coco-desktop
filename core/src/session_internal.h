@@ -63,6 +63,7 @@ struct cocosession {
     volatile int cur_machine;
     volatile int cur_tv_input;
     volatile int cur_ccr;
+    volatile int cur_cpu;
 
     /* Handshake: the emulator thread publishes whether the core came up, so
      * cocosession_start can report a failed xroar_init to its caller rather
