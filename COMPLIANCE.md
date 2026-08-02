@@ -19,19 +19,42 @@ the Apple II target there is no GPL-2.0 component to relicense upward.
 ## XRoar is used unmodified except where noted
 
 XRoar is not vendored as a fork. `cmake/StageXRoar.cmake` copies `src/`,
-`portalib/` and `top-config.h` out of the pinned tarball and applies exactly
-three transforms, all recorded in `core/xroar-generated/.source-info`:
+`portalib/` and `top-config.h` out of the pinned tarball, replaces
+`src/becker.c` (see below), and runs `tools/xroar/patch-staged-tree.py`,
+which applies three further kinds of transform to the staged copy, all
+idempotent and hard-failing on a missing anchor (a version bump that moves
+one is a build error, not a silent no-op), and all recorded in
+`core/xroar-generated/.source-info`:
 
-1. **`config.h` is generated** by `tools/xroar/patch-staged-tree.py` instead of
-   by XRoar's autotools `configure`, which we do not run. It selects the
-   headless CoCo/Dragon feature set and resolves the host-dependent half with
-   the preprocessor, so one file serves Linux, macOS and Windows.
-2. **Two module registrations** are added to `src/ui.c` and `src/ao.c`, guarded
-   on `XROAR_DESKTOP_MODULES`, so XRoar can find
+1. **`config.h` is generated** instead of by XRoar's autotools `configure`,
+   which we do not run. It selects the headless CoCo/Dragon feature set and
+   resolves the host-dependent half with the preprocessor, so one file
+   serves Linux, macOS and Windows — including `WINDOWS32`, the macro
+   upstream's own code keys basic POSIX-vs-Winsock branching on in
+   `src/becker.c` and several other unmodified files (not `_WIN32`, which
+   this generated file uses everywhere else; autotools would normally
+   define it, and nothing else here does that job) and `HAVE_STRSEP`
+   (correctly *not* defined on Windows: MinGW-w64 lacks `strsep()`, unlike
+   the glibc/Darwin libc this project also builds against).
+2. **Two module registrations** are added to `src/ui.c` and `src/ao.c`,
+   guarded on `XROAR_DESKTOP_MODULES`, so XRoar can find
    `core/xroar/desktop/{ui,ao,joystick}_desktop.c`. This is the same edit the
-   Android app makes under `__ANDROID__`.
-3. **`src/becker.c` is replaced** with `tools/xroar/support/becker.c`, a
-   lazy-connecting variant. See below.
+   Android app makes under `__ANDROID__`. A further nine narrow guards
+   (`src/xroar.c` ×6, `src/ui.c` ×2 more, `src/hkbd.c` ×1) exclude upstream's
+   *native* win32 GUI module (`ui_windows32`, never registered here) and its
+   `-C` console-allocation option from a Windows build — without them,
+   `WINDOWS32` being correctly defined for reason 1 above also pulls in a
+   header wanting SDL2 (this project is SDL3-only) and several externs whose
+   defining files are never compiled here.
+3. **A small read-only accessor** is added to the GIME (TCC1014) part
+   (`src/tcc1014/tcc1014.h`/`.c`), for the debugger's video pane
+   (`core/debugger/cocovideo.c`). GIME's video-mode state has no public
+   getter and, per real hardware, is mostly write-only even through the
+   CPU's own bus.
+
+`src/becker.c` itself is not one of these three: `cmake/StageXRoar.cmake`
+replaces the whole file, before `patch-staged-tree.py` ever runs, with
+`tools/xroar/support/becker.c` — a lazy-connecting variant. See below.
 
 No frontend source (SDL, GTK, X11, WASM, OpenGL) is compiled; those files are
 simply never listed in `core/CMakeLists.txt`.
