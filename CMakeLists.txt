@@ -117,12 +117,78 @@ endif()
 # desktop-entry id, so the same art is installed under each frontend's id --
 # at every hicolor size, which is what makes it show up crisply everywhere
 # from the 16px window list to the 256px app grid.
+#
+# Only for frontends actually built here: a GNOME-only configure installing
+# the KDE id's icon too was harmless (nothing references an orphaned icon
+# with no matching .desktop/.metainfo), but M9's per-frontend packages make
+# it worth tightening -- a package should not ship files for an app it does
+# not contain.
 set(COCO_ICON_SIZES 16 24 32 48 64 128 192 256 512)
-set(COCO_ICON_IDS online.fujinet.go.coco.gnome online.fujinet.go.coco.kde)
-foreach(_size IN LISTS COCO_ICON_SIZES)
-  foreach(_id IN LISTS COCO_ICON_IDS)
-    install(FILES data/icons/hicolor/${_size}x${_size}/apps/fujinet-go-coco.png
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${_size}x${_size}/apps
-            RENAME ${_id}.png)
-  endforeach()
+set(COCO_ICON_TARGETS_AND_IDS
+  fujinet-go-coco-gnome online.fujinet.go.coco.gnome
+  fujinet-go-coco-kde online.fujinet.go.coco.kde)
+list(LENGTH COCO_ICON_TARGETS_AND_IDS _coco_icon_n)
+math(EXPR _coco_icon_last "${_coco_icon_n} - 1")
+foreach(_i RANGE 0 ${_coco_icon_last} 2)
+  list(GET COCO_ICON_TARGETS_AND_IDS ${_i} _target)
+  math(EXPR _j "${_i} + 1")
+  list(GET COCO_ICON_TARGETS_AND_IDS ${_j} _id)
+  if(TARGET ${_target})
+    foreach(_size IN LISTS COCO_ICON_SIZES)
+      install(FILES data/icons/hicolor/${_size}x${_size}/apps/fujinet-go-coco.png
+              DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${_size}x${_size}/apps
+              RENAME ${_id}.png)
+    endforeach()
+  endif()
 endforeach()
+
+# ---- packaging (M9) --------------------------------------------------------
+#
+# One package per frontend, not one package for both: GNOME (GTK4/
+# libadwaita) and KDE (Qt6) pull in entirely different runtime library
+# stacks, and a user who wants one should not be made to depend on the
+# other. So this expects FRONTEND=gnome or FRONTEND=kde -- exactly the same
+# per-frontend split the flatpak manifests already use -- and names the
+# package accordingly; FRONTEND=all (the default) still configures fine for
+# ordinary development builds, it just packages under a name that says so
+# rather than silently mixing both frontends' files into one archive.
+if(FRONTEND STREQUAL "gnome")
+  set(CPACK_PACKAGE_NAME "fujinet-go-coco-gnome")
+elseif(FRONTEND STREQUAL "kde")
+  set(CPACK_PACKAGE_NAME "fujinet-go-coco-kde")
+else()
+  set(CPACK_PACKAGE_NAME "fujinet-go-coco")
+endif()
+
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_VENDOR "FujiNet")
+set(CPACK_PACKAGE_CONTACT "https://github.com/FujiNetWIFI/fujinet-go-coco-desktop/issues")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://fujinet.online/")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Self-contained Tandy Color Computer with built-in FujiNet")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+set(CPACK_STRIP_FILES ON)
+
+if(UNIX AND NOT APPLE)
+  set(CPACK_GENERATOR "DEB;RPM;TGZ")
+
+  # Auto-detected from the actual linked libraries (dpkg-shlibdeps /
+  # rpmbuild's own dependency generator) rather than hand-listed: GTK4 vs
+  # Qt6 alone makes one fixed list wrong for whichever frontend was not
+  # built, and a hand-list silently goes stale the moment a dependency's
+  # package name changes across distributions.
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+  set(CPACK_DEBIAN_PACKAGE_SECTION "games")
+  set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "${CPACK_PACKAGE_HOMEPAGE_URL}")
+
+  set(CPACK_RPM_PACKAGE_AUTOREQPROV ON)
+  set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
+  set(CPACK_RPM_PACKAGE_GROUP "Amusements/Games")
+  set(CPACK_RPM_PACKAGE_URL "${CPACK_PACKAGE_HOMEPAGE_URL}")
+endif()
+
+# CPACK_PACKAGE_FILE_NAME defaults to <name>-<version>-<system>[-<arch>];
+# left as-is except spelling out the generator explicitly is unnecessary --
+# the default already includes it via the file extension.
+include(CPack)

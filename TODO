@@ -397,7 +397,54 @@ M8 (done) Icons, desktop entries, AppStream metainfo, screenshots.
     the debugger (COCO_OPEN_DEBUGGER=1) mid-boot, disassembly/registers/
     memory panes and the Load Symbols…/Clear Symbols buttons all visible.
 
-M9  Packaging + release job.
+M9 (done) Packaging + release job.
+    No sibling port has a CPack or release-workflow precedent to copy (adam-
+    desktop's own "Cutting a release" ships plain zips + flatpak, no CPack at
+    all), so this is new: CPack in the top-level CMakeLists.txt, one package
+    per frontend rather than one package for both -- GNOME (GTK4/libadwaita)
+    and KDE (Qt6) pull in entirely different runtime library stacks, so
+    CPACK_PACKAGE_NAME switches on the FRONTEND cache variable
+    (fujinet-go-coco-gnome / -kde / plain fujinet-go-coco for an FRONTEND=all
+    dev build) rather than trying to split one build into components.
+    DEB/RPM dependencies are auto-detected (CPACK_DEBIAN_PACKAGE_SHLIBDEPS,
+    CPACK_RPM_PACKAGE_AUTOREQPROV) instead of hand-listed, since a fixed list
+    goes stale the moment a dependency's package name changes across
+    distributions and GTK vs Qt alone makes one list wrong for whichever
+    frontend was not built. Added LICENSE (verbatim GPL-3.0 text, copied from
+    fujinet-go-adam-desktop's -- same licence, not project-specific content)
+    for CPACK_RESOURCE_FILE_LICENSE. While in there: the icon-install loop
+    used to install both frontends' hicolor icon sets regardless of which
+    was actually built (harmless when nothing referenced the orphaned one,
+    but a packaged archive should not ship files for an app it does not
+    contain) -- tightened to install only for a TARGET that exists.
+
+    .github/workflows/release.yml, triggered on a `v*` tag: a check-version
+    job that fails the whole run before anything builds if the tag,
+    CMakeLists.txt's project() VERSION and both frontends' metainfo
+    <release version="..."> entries disagree (same discipline as adam-
+    desktop's release job, adapted since there is no macOS/Windows leg
+    yet); a linux-packages matrix (gnome, kde) that configures with
+    -DCMAKE_INSTALL_PREFIX=/usr, builds, runs ctest, then `cpack -G
+    "DEB;RPM;TGZ"`; a flatpaks matrix building both manifests and
+    `flatpak build-bundle`-ing each into a single installable file (same
+    runtime-pull-from-Flathub approach as flatpak.yml, for the same reason:
+    no flathub-infra prebuilt image existed yet for kde-6.11 when this was
+    written); and a release job that downloads every artifact and creates
+    (or updates) a draft GitHub Release via `gh release create`/`upload`.
+    "Cutting a release" in the README documents the actual steps and lists
+    the assets this produces today; macOS/Windows rows join that table once
+    M10 lands.
+
+    Verified locally as far as this machine can: `cpack -G TGZ` for a
+    FRONTEND=gnome build (dpkg-deb and rpmbuild are not installed here,
+    Arch Linux ships neither by default) produces a correctly laid-out
+    archive -- binary, desktop entry, metainfo, hicolor icons for that
+    frontend's app id only, the FujiNet runtime tree -- and the icon-loop
+    tightening confirmed by diffing the tarball's contents before and
+    after. DEB/RPM generation and the release workflow's own YAML have not
+    been run end to end (that needs an actual `v*` tag push); the version-
+    check and metainfo-grep logic were tested against this tree's real
+    files by hand, not just read.
 
 M10 macOS and Windows frontends, remaining debugger windows, polish.
 

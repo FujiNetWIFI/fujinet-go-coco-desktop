@@ -122,6 +122,40 @@ the bus:
 ss -tlnp | grep 65504
 ```
 
+## Cutting a release
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds every
+artifact this repository currently publishes and attaches them to a draft
+GitHub Release:
+
+| Asset | Contents |
+|---|---|
+| `fujinet-go-coco-gnome-<version>-Linux.{deb,rpm,tar.gz}` | the GNOME frontend, packaged with CPack |
+| `fujinet-go-coco-kde-<version>-Linux.{deb,rpm,tar.gz}` | the KDE frontend, packaged with CPack |
+| `online.fujinet.go.coco.gnome.flatpak` | single-file bundle: `flatpak install ./…flatpak` |
+| `online.fujinet.go.coco.kde.flatpak` | same, for the KDE frontend |
+
+macOS and Windows artifacts join this table once those frontends exist
+(M10) — there is nothing to package for them yet.
+
+The version is declared in the tree, not derived from the tag, so a
+downloaded build's About box can never disagree with the download it came
+from — the release job's first job checks the tag, `CMakeLists.txt` and
+both frontends' metainfo agree, and fails the whole run before anything is
+built if they do not. To release 0.2.0:
+
+1. `project(... VERSION 0.2.0 ...)` in `CMakeLists.txt` (everything else —
+   the About boxes, `COCO_VERSION_STRING`, the CPack package names — follows
+   from there).
+2. Add a `<release version="0.2.0" date="…"/>` entry to both
+   `frontends/*/data/*.metainfo.xml` — this is what software centres show,
+   so put the user-visible notes there.
+3. Commit, then `git tag v0.2.0 && git push origin v0.2.0`.
+
+The release is created as a **draft** so the notes can be edited before it
+goes out; if you prefer to write the release in the web UI first, do that
+and the assets are attached to it when the tag build finishes.
+
 ## Licence
 
 GPL-3.0-or-later. See `COMPLIANCE.md` for per-component provenance and for

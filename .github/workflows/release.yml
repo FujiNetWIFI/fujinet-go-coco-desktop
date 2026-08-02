@@ -1,0 +1,193 @@
+name: Release
+
+# M9: cutting a release. Triggered by a `v*` tag, builds every artifact this
+# repository currently publishes -- Linux packages for both frontends
+# (.deb/.rpm/.tar.gz via CPack) and both flatpak single-file bundles -- and
+# attaches them to a draft GitHub Release. macOS and Windows artifacts join
+# this same job once those frontends exist (M10); there is nothing to
+# package for them yet.
+#
+# The version is declared in the tree, not derived from the tag, so a
+# downloaded build's About box can never disagree with the download it came
+# from: the version-check job below fails loudly if the tag,
+# CMakeLists.txt's project(... VERSION ...) and both frontends' metainfo
+# <release version="..."> entries do not all agree. See "Cutting a release"
+# in the README.
+#
+# WITH_COCO_ROMS=OFF throughout, same as every other CI job and every
+# artifact this repository publishes: the system ROMs are not freely
+# redistributable (see COMPLIANCE.md).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag, CMakeLists.txt and both metainfo files must all agree
+        id: v
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          echo "tag version: $tag"
+          cmake_version=$(sed -n 's/^project([^)]*VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "CMakeLists.txt version: $cmake_version"
+          if [ "$tag" != "$cmake_version" ]; then
+            echo "::error::tag v$tag does not match CMakeLists.txt's project() VERSION $cmake_version"
+            exit 1
+          fi
+          for m in frontends/gnome/data/*.metainfo.xml frontends/kde/data/*.metainfo.xml; do
+            if ! grep -q "<release version=\"$tag\"" "$m"; then
+              echo "::error::$m has no <release version=\"$tag\"> entry"
+              exit 1
+            fi
+          done
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  linux-packages:
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        frontend: [gnome, kde]
+    runs-on: ubuntu-latest
+    env:
+      LD_LIBRARY_PATH: /tmp/sdl3-install/lib
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same package list as linux.yml, plus dpkg-dev/rpm for CPack's DEB
+      # and RPM generators (ubuntu-latest has dpkg-deb already; rpmbuild
+      # does not ship by default).
+      - name: Install build tools and frontend toolkits
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build python3 pkg-config git \
+            libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev \
+            qt6-base-dev libqt6opengl6-dev qt6-webengine-dev \
+            desktop-file-utils appstream \
+            libx11-dev libxext-dev libxrandr-dev libxi-dev libxss-dev \
+            libxcursor-dev libxkbcommon-dev libwayland-dev libdrm-dev \
+            libgbm-dev libgl1-mesa-dev libpulse-dev libasound2-dev \
+            libxtst-dev dpkg-dev rpm
+
+      - name: Build and install SDL3 (release-3.4.12, pinned)
+        run: |
+          git clone --depth 1 --branch release-3.4.12 \
+            https://github.com/libsdl-org/SDL.git /tmp/sdl3-src
+          cmake -S /tmp/sdl3-src -B /tmp/sdl3-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/sdl3-install \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF
+          cmake --build /tmp/sdl3-build
+          cmake --install /tmp/sdl3-build
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_PREFIX_PATH=/tmp/sdl3-install \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DFRONTEND=${{ matrix.frontend }} \
+            -DWITH_COCO_ROMS=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Package (deb, rpm, tar.gz)
+        working-directory: build
+        run: cpack -G "DEB;RPM;TGZ"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.frontend }}
+          path: |
+            build/*.deb
+            build/*.rpm
+            build/*.tar.gz
+          if-no-files-found: error
+
+  flatpaks:
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        manifest:
+          - build-aux/flatpak/online.fujinet.go.coco.gnome.yml
+          - build-aux/flatpak/online.fujinet.go.coco.kde.yml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak and flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --if-not-exists --user flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+
+      - name: Install the runtime and SDK this manifest targets
+        run: |
+          runtime=$(sed -n 's/^runtime: *//p' "${{ matrix.manifest }}")
+          runtime_version=$(sed -n "s/^runtime-version: *'\(.*\)'/\1/p" "${{ matrix.manifest }}")
+          sdk=$(sed -n 's/^sdk: *//p' "${{ matrix.manifest }}")
+          flatpak install -y --user flathub \
+            "${runtime}/x86_64/${runtime_version}" \
+            "${sdk}/x86_64/${runtime_version}"
+
+      - name: Build and export to a local repo
+        run: |
+          flatpak-builder --user --force-clean --repo=repo \
+            --disable-rofiles-fuse build-flatpak "${{ matrix.manifest }}"
+
+      - name: Bundle into a single installable file
+        id: bundle
+        run: |
+          app_id=$(sed -n 's/^app-id: *//p' "${{ matrix.manifest }}")
+          flatpak build-bundle repo "${app_id}.flatpak" "${app_id}" master
+          echo "app_id=${app_id}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-${{ steps.bundle.outputs.app_id }}
+          path: '*.flatpak'
+          if-no-files-found: error
+
+  release:
+    needs: [check-version, linux-packages, flatpaks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts into one release/ directory
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' \
+                                    -o -name '*.tar.gz' -o -name '*.flatpak' \) \
+            -exec cp {} release/ \;
+          ls -l release
+
+      - name: Create (or update) the draft release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ needs.check-version.outputs.version }}"
+          if ! gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "${{ github.repository }}" \
+              --draft --generate-notes --title "$tag"
+          fi
+          gh release upload "$tag" release/* --repo "${{ github.repository }}" --clobber
