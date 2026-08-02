@@ -376,8 +376,9 @@ static void gime_vram_read(struct ram *ram, uint32_t base, unsigned xoff,
  * counter at the end of each scanline; do_vb_irq then RESETS it to 0 and
  * advances the video address by row_stride whenever the counter satisfies
  * (row & rowmask) == rowmask. The reset is what makes rowmask behave as a
- * lines-per-row selector (LPR_rowmask[] {0,1,2,8,9,10,11,16} -> 1,2,3,8,9,
- * 10,11 lines) rather than a bit test against a free-running counter:
+ * lines-per-row selector (LPR_rowmask[] {0,1,2,8,9,10,11,16} yields GIME's
+ * documented LPR table: 1, 1, 2, 8, 9, 10, 11 and "infinite" lines per
+ * character row) rather than a bit test against a free-running counter:
  * without it, rowmask 8 would advance on eight scanlines out of every
  * sixteen instead of once every eight, and row would run past a glyph's 12
  * font rows. That is not a fixed divisor, which is why this is simulated

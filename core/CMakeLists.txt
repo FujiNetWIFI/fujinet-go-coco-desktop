@@ -309,6 +309,14 @@ add_executable(video_test tests/video_test.c)
 target_link_libraries(video_test cocosession)
 target_include_directories(video_test PRIVATE src)
 
+# Includes debugger/cocovideo.c to reach a static -- see gimerow_test.c. That
+# brings in the rest of the file's statics unused, hence -Wno-unused-function.
+add_executable(gimerow_test tests/gimerow_test.c)
+target_link_libraries(gimerow_test cocosession)
+target_include_directories(gimerow_test PRIVATE debugger
+                           "${CMAKE_CURRENT_BINARY_DIR}")
+target_compile_options(gimerow_test PRIVATE -Wall -Wextra -Wno-unused-function)
+
 add_test(NAME input COMMAND input_test)
 add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
@@ -321,6 +329,7 @@ add_test(NAME drivewire_smoke COMMAND drivewire_smoke)
 # registered twice rather than looping over both machines in one process.
 add_test(NAME video_coco3 COMMAND video_test coco3)
 add_test(NAME video_coco2 COMMAND video_test coco2)
+add_test(NAME gimerow COMMAND gimerow_test)
 # All need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;
 # drivewire_smoke additionally needs libfujinet and a free Becker port. All
 # are reported as 77 rather than as failures.
