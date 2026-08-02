@@ -1,12 +1,17 @@
 name: macOS
 
-# Second of the M7 CI jobs (see TODO). No macOS frontend exists yet (M10), so
-# FRONTEND=all (the default) just builds core + the FujiNet runtime + the
-# test suite -- add_frontend() in the top-level CMakeLists.txt skips a
-# frontend directory that has no CMakeLists.txt yet rather than failing the
-# configure. This still exercises everything this milestone's work touches
-# (the disassembler, the debugger engine, the session/host layer, symtab)
-# on a second OS and compiler (Apple clang) ahead of M10 actually needing it.
+# Builds the native AppKit frontend (frontends/macos) alongside core + the
+# FujiNet runtime + the test suite -- add_frontend() in the top-level
+# CMakeLists.txt only skips a frontend directory that has no
+# CMakeLists.txt, so this picked the frontend up automatically once it
+# landed (M10), no workflow change needed. Exercises everything this
+# project touches (the disassembler, the debugger engine, the
+# session/host layer, symtab) on a second OS and compiler (Apple clang).
+#
+# This is push/PR CI, not the release build: it links a shared SDL3 for
+# speed, unlike release.yml's macos-package job, which builds SDL3
+# statically, verifies the bundle has no Homebrew library leaks, and
+# produces the actual shipped .zip.
 #
 # WITH_COCO_ROMS=OFF for the same reason as linux.yml: the system ROMs are
 # not freely redistributable (see COMPLIANCE.md), so CI never has them, and

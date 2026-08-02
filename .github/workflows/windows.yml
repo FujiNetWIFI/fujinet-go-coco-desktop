@@ -9,15 +9,20 @@ name: Windows
 # tools/fujinet/build-fujinet-desktop.sh already expects to be run (see its
 # own MSYS2/cygpath handling).
 #
-# No Windows frontend exists yet (M10), so, like macos.yml, this builds
-# core + the FujiNet runtime + the test suite only -- add_frontend() in the
-# top-level CMakeLists.txt skips a frontend directory with no
-# CMakeLists.txt rather than failing the configure. Still exercises
-# everything M6 touched (disassembler, debugger engine, session/host layer,
-# symtab) on MinGW-w64 ahead of M10 actually needing it, including the two
-# things Windows genuinely does differently here: ws2_32 (becker.c is a
-# winsock client) and TRE (MinGW-w64 has no regex.h; portalib/sdsx.c needs
-# one, and libsystre/libtre supply it -- see core/CMakeLists.txt).
+# Builds the native Win32 frontend (frontends/windows) alongside core + the
+# FujiNet runtime + the test suite -- add_frontend() in the top-level
+# CMakeLists.txt only skips a frontend directory that has no
+# CMakeLists.txt, so this picked the frontend up automatically once it
+# landed (M10), no workflow change needed. Exercises everything M6 touched
+# (disassembler, debugger engine, session/host layer, symtab) on
+# MinGW-w64, including the two things Windows genuinely does differently
+# here: ws2_32 (becker.c is a winsock client) and TRE (MinGW-w64 has no
+# regex.h; portalib/sdsx.c needs one, and libsystre/libtre supply it -- see
+# core/CMakeLists.txt).
+#
+# This is push/PR CI, not the release build: it links the packaged
+# (dynamic) SDL3 for speed, unlike release.yml's windows-package job, which
+# builds SDL3 statically and produces the actual shipped installer/zip.
 #
 # WITH_COCO_ROMS=OFF for the same reason as linux.yml/macos.yml: the system
 # ROMs are not freely redistributable (see COMPLIANCE.md), so CI never has

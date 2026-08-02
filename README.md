@@ -134,9 +134,9 @@ GitHub Release:
 | `fujinet-go-coco-kde-<version>-Linux.{deb,rpm,tar.gz}` | the KDE frontend, packaged with CPack |
 | `online.fujinet.go.coco.gnome.flatpak` | single-file bundle: `flatpak install ./…flatpak` |
 | `online.fujinet.go.coco.kde.flatpak` | same, for the KDE frontend |
-
-macOS and Windows artifacts join this table once those frontends exist
-(M10) — there is nothing to package for them yet.
+| `fujinet-go-coco-<version>-windows.zip` | portable folder: unzip and run, no install |
+| `fujinet-go-coco-<version>-windows-setup.exe` | NSIS installer (per-user, no admin rights) |
+| `fujinet-go-coco-<version>-macos.zip` | `FujiNet Go CoCo.app`, unsigned unless the signing secrets are configured (see below) |
 
 The version is declared in the tree, not derived from the tag, so a
 downloaded build's About box can never disagree with the download it came
@@ -155,6 +155,30 @@ built if they do not. To release 0.2.0:
 The release is created as a **draft** so the notes can be edited before it
 goes out; if you prefer to write the release in the web UI first, do that
 and the assets are attached to it when the tag build finishes.
+
+### Signing the macOS build
+
+`release.yml`'s `macos-package` job signs and notarises the app bundle when
+these repository secrets exist, and quietly ships an unsigned bundle when
+they do not — so a tag pushed before any of this is configured still
+produces a working (if Gatekeeper-warned) release:
+
+| Secret | What it is |
+|---|---|
+| `MACOS_CERTIFICATE` | "Developer ID Application" certificate + key, exported as `.p12`, then `base64 -i cert.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | the password used for that export |
+| `MACOS_SIGN_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `MACOS_NOTARY_KEY` | App Store Connect API key `.p8`, base64-encoded |
+| `MACOS_NOTARY_KEY_ID` | that key's Key ID |
+| `MACOS_NOTARY_ISSUER` | the Issuer ID from App Store Connect |
+
+All of it requires a paid Apple Developer Program membership. Certificate
+but no notary key is a valid halfway house (the app is signed and its
+origin verifiable, but first launch still needs right-click ▸ Open); the
+job says so in a warning rather than failing. None of these secrets are
+currently configured for this repository, so today's releases ship
+unsigned — see `fujinet-go-adam-desktop`'s README for the full walkthrough
+of producing them (none of it requires owning a Mac).
 
 ## Licence
 
