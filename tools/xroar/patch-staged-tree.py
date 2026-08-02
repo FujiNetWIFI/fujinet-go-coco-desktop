@@ -236,6 +236,42 @@ def register_modules(root: Path) -> None:
             "#endif\n"
             "\t&ui_null_module,\n\tNULL\n};",
         ),
+        # The two native-module list entries WINDOWS32 also gates (see the
+        # longer comment on the src/xroar.c patch below for why): without
+        # these, a Windows link pulls in extern struct references to
+        # filereq_windows32_module/ui_windows32_module, whose defining .c
+        # files (src/windows32/...) are never compiled here.
+        (
+            "#ifdef WINDOWS32\n"
+            "\t&filereq_windows32_module,\n"
+            "#endif\n",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\t&filereq_windows32_module,\n"
+            "#endif\n",
+        ),
+        (
+            "#ifdef WINDOWS32\n"
+            "\t&ui_windows32_module,\n"
+            "#endif\n",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\t&ui_windows32_module,\n"
+            "#endif\n",
+        ),
+    ])
+
+    # src/hkbd.c's OS-native keymap auto-detection is an optional enhancement
+    # (falls back to hk_default_update_keymap() otherwise, exactly the path
+    # already taken here on Linux and macOS -- neither HAVE_X11 nor
+    # HAVE_COCOA is ever defined by generate_config_h either, both being
+    # native-GUI-only same as this). hk_windows_update_keymap() is only
+    # implemented in src/windows32/hkbd_windows.c, never compiled here.
+    patch(root, "src/hkbd.c", [
+        (
+            "#elif defined(WINDOWS32)\n"
+            "\thave_keymap = have_keymap || hk_windows_update_keymap();\n",
+            "#elif defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\thave_keymap = have_keymap || hk_windows_update_keymap();\n",
+        ),
     ])
 
     patch(root, "src/ao.c", [
