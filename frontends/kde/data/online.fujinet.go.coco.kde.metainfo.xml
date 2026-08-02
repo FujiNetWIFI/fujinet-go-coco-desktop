@@ -44,6 +44,15 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.2" date="2026-08-02">
+      <description>
+        <p>
+          Fixed a debugger video pane bug where the Color Computer 3's
+          16-colour, 16-byte-per-row graphics modes showed corrupted pixel
+          data instead of matching what the real GIME chip renders.
+        </p>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-08-02">
       <description>
         <p>

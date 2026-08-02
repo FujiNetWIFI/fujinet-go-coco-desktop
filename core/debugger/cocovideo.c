@@ -39,7 +39,7 @@
  * Deliberately out of scope (documented at each site rather than silently
  * guessed): the RG2 "half resolution" compat-mode special case, which
  * XRoar's own author flags as an unconfirmed guess; the monochrome/
- * composite pixel mask; the HRES==0&&CRES>=2 zeroing quirk; and GIME's
+ * composite pixel mask; and GIME's
  * `resolution` field, which is a display-timing oversampling factor, not
  * decoded content -- this module produces its own canonical canvas instead
  * (see below), which already reflects every mode at its real proportions.
@@ -612,6 +612,18 @@ static int decode_gime_native(struct TCC1014 *gime, struct ram *ram,
         if (addr[y] != last_addr) {
             gime_vram_read(ram, addr[y], rowbuf, (int)fetch_bpr);
             last_addr = addr[y];
+
+            /* GIME fetches VRAM 16 bits at a time via fetch_byte_vram();
+             * in 16-colour, 16-byte-per-row graphics modes it discards the
+             * low byte of each fetch instead of caching it for the next
+             * pixel group (tcc1014.c fetch_byte_vram(), HRES==0 && CRES>=2
+             * branch: "gime->vdata_cache = 0"). That makes every odd byte
+             * of the row render as 0, not whatever is actually in RAM. */
+            if (st.BP && st.HRES == 0 && st.CRES >= 2) {
+                unsigned i;
+                for (i = 1; i < fetch_bpr; i += 2)
+                    rowbuf[i] = 0;
+            }
         }
 
         if (st.BP) {
