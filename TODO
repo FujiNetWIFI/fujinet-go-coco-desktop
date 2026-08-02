@@ -253,7 +253,7 @@ M6 (in progress) The disassembler (6809 and 6309), the engine, both Linux
     treat it as less trusted than the other three paths until something
     exercises it.
 
-M7 (part) CI: linux and macOS done, Windows and flatpak still open.
+M7 (part) CI: linux, macOS and Windows done, flatpak still open.
     .github/workflows/linux.yml: configure/build/ctest with WITH_COCO_ROMS=OFF
     (the system ROMs are not redistributable, so CI never has them -- boot_
     smoke, drivewire_smoke, debug and the two video_coco* tests correctly
@@ -290,6 +290,60 @@ M7 (part) CI: linux and macOS done, Windows and flatpak still open.
     first run (30751731520) with no fixes needed -- confirmed from the log
     that the FujiNet runtime actually built (mbedTLS included) rather than
     silently no-op'ing, and that all 11 tests ran or skipped as expected.
+
+    .github/workflows/windows.yml: native windows-latest + msys2/setup-
+    msys2 (UCRT64), not the mingw-w64 cross-compile documented in cmake/
+    toolchains/mingw-w64.cmake -- that recipe exists only because the
+    maintainer has no Windows machine to build on directly; this workflow is
+    what actually ships in CI/CD, so it drives the real native toolchain,
+    matching how build-fujinet-desktop.sh already expected to run (its own
+    MSYS2/cygpath handling). Same core-only scope as macos.yml (no Windows
+    frontend yet). MSYS2's UCRT64 repo happens to package the exact SDL3 pin
+    (3.4.12), so this uses that directly rather than building from source,
+    with a step that fails loudly if it ever drifts from the pin.
+
+    Took seven pushes to go green (30753091420), each diagnosed locally
+    first against the mingw-w64 cross toolchain already in this repo
+    (cmake/toolchains/mingw-w64.cmake) rather than by round-tripping through
+    CI -- faster, and it meant every push after the first had already been
+    proven to fix the specific error the previous run reported:
+      * config.h never defined WINDOWS32 -- the macro src/becker.c and 17
+        other unmodified upstream files branch on for basic POSIX-vs-
+        Winsock differences, not _WIN32 (which this project's own generated
+        config.h uses everywhere else). Autotools' configure would normally
+        define it; nothing here was doing that job. Fixed in
+        generate_config_h().
+      * HAVE_STRSEP was unconditionally 1 on the reasoning that portalib
+        only needs to supply strsep() "when the host lacks it" -- true for
+        glibc/Darwin (both behind _BSD_SOURCE, which src/joystick.c
+        defines), false for MinGW-w64. Moved behind !defined(_WIN32).
+      * Once WINDOWS32 was defined, xroar.c pulled in the native win32 GUI
+        module's header (windows32/common_windows32.h, which wants SDL2)
+        and called windows32_init()/windows32_shutdown() -- upstream only
+        builds these alongside ui_windows32, which nothing here registers
+        (our own ui_desktop_module stands in for it, like every other
+        frontend). A first attempt excluded ALL of xroar.c's WINDOWS32
+        branches with one #undef; that broke the mkdir() branch too (a
+        genuine, correct POSIX-vs-Windows difference elsewhere in the same
+        file) and CI caught it immediately. Replaced with six precise
+        per-site "&& !defined(XROAR_DESKTOP_MODULES)" guards instead, plus
+        three more of the same shape once linking exposed src/ui.c's
+        filereq_windows32_module/ui_windows32_module module-list entries
+        and src/hkbd.c's hk_windows_update_keymap() (an optional keymap
+        auto-detection enhancement on the same #elif ladder as HAVE_X11/
+        HAVE_COCOA, neither of which this project defines either -- Windows
+        now takes the same hk_default_update_keymap() fallback Linux and
+        macOS already did).
+      * core/tests/session_test.c called _mkdir() under #if defined(_WIN32)
+        without #include <direct.h> (boot_smoke.c already had this right).
+      * fujinet-firmware's own build wants plain `make`, not the
+        mingw32-make.exe the mingw-w64-ucrt-x86_64-make package provides --
+        installed MSYS2's own base `make` instead.
+    All nine fixes are in tools/xroar/patch-staged-tree.py (the config.h/
+    xroar.c/ui.c/hkbd.c ones), core/tests/session_test.c, and windows.yml
+    itself; none are Windows-specific hacks bolted on top -- they teach the
+    shared staging/generation step what MinGW-w64 actually needs, the same
+    place every other cross-platform difference already lives.
 
 M8  Icons, desktop entries, AppStream metainfo, screenshots.
     Desktop entries and metainfo exist for both Linux frontends. Icon art now
