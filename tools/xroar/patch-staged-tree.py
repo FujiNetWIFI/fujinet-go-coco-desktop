@@ -253,6 +253,37 @@ def register_modules(root: Path) -> None:
         ),
     ])
 
+    # src/xroar.c has several #ifdef WINDOWS32 blocks (the header include,
+    # console allocation, windows32_init()/windows32_shutdown() calls, ...)
+    # that are all about upstream's native win32 GUI module (ui_windows32),
+    # not "building for Windows" in general. Nothing here ever registers
+    # that module -- our own ui_desktop_module stands in for it, same as
+    # every other frontend -- so on Windows those blocks pulled in a header
+    # that itself wants SDL2 (sdl2/common.h) for no reason: we build
+    # SDL3-only, and would then need windows32_init()/_shutdown() (dialogs,
+    # menus, an About box) that nothing provides.
+    #
+    # WINDOWS32 still has to be defined globally (see generate_config_h) for
+    # the many OTHER upstream files -- becker.c, hkbd.c, joystick.c, path.c
+    # -- that key basic POSIX-vs-Winsock branching on it; only xroar.c's own
+    # GUI-specific uses need excluding, and #undef right after xroar.c's own
+    # includes does that in one place rather than patching each of its half
+    # dozen "#ifdef WINDOWS32" sites (fragile across an XRoar version bump).
+    patch(root, "src/xroar.c", [
+        (
+            "#ifdef WINDOWS32\n"
+            "#include \"windows32/common_windows32.h\"\n"
+            "#endif\n",
+            "#ifdef XROAR_DESKTOP_MODULES\n"
+            "#undef WINDOWS32\n"
+            "#else\n"
+            "#ifdef WINDOWS32\n"
+            "#include \"windows32/common_windows32.h\"\n"
+            "#endif\n"
+            "#endif\n",
+        ),
+    ])
+
 
 # --- 3. GIME debug accessor -------------------------------------------------
 
