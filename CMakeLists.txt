@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 # and the release workflow all take it from PROJECT_VERSION, and cutting a
 # tag checks that the tag agrees with it (see "Cutting a release" in the
 # README).
-project(fujinet-go-coco-desktop VERSION 0.2.0 LANGUAGES C)
+project(fujinet-go-coco-desktop VERSION 0.2.1 LANGUAGES C)
 
 add_compile_definitions(COCO_VERSION_STRING="${PROJECT_VERSION}")
 
