@@ -1,0 +1,81 @@
+name: Windows
+
+# Third of the M7 CI jobs (see TODO). Native MSYS2/UCRT64, not the mingw-w64
+# cross-compile documented in cmake/toolchains/mingw-w64.cmake -- that
+# recipe exists because the maintainer has no Windows machine to build on
+# directly, but this workflow *is* the Windows build once it lands in
+# CI/CD, so it should be the real thing: a native windows-latest runner
+# driving the native UCRT64 toolchain, exactly the way
+# tools/fujinet/build-fujinet-desktop.sh already expects to be run (see its
+# own MSYS2/cygpath handling).
+#
+# No Windows frontend exists yet (M10), so, like macos.yml, this builds
+# core + the FujiNet runtime + the test suite only -- add_frontend() in the
+# top-level CMakeLists.txt skips a frontend directory with no
+# CMakeLists.txt rather than failing the configure. Still exercises
+# everything M6 touched (disassembler, debugger engine, session/host layer,
+# symtab) on MinGW-w64 ahead of M10 actually needing it, including the two
+# things Windows genuinely does differently here: ws2_32 (becker.c is a
+# winsock client) and TRE (MinGW-w64 has no regex.h; portalib/sdsx.c needs
+# one, and libsystre/libtre supply it -- see core/CMakeLists.txt).
+#
+# WITH_COCO_ROMS=OFF for the same reason as linux.yml/macos.yml: the system
+# ROMs are not freely redistributable (see COMPLIANCE.md), so CI never has
+# them, and boot_smoke/drivewire_smoke/debug/cpu_switch/video_coco3/
+# video_coco2 report ctest's skip code (77) rather than actually running.
+#
+# WITH_FUJINET is left at its default (ON) for the same reason as
+# macos.yml: proving the platform-specific runtime build actually works
+# here, not skipping it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # autocrlf would rewrite every staged/patched XRoar and FujiNet
+          # source file's line endings on checkout, which is exactly the
+          # kind of diff-shaped noise cmake/StageXRoar.cmake's re-stage
+          # detection (content hashing) is not expecting.
+          fetch-depth: 1
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-sdl3
+            mingw-w64-ucrt-x86_64-libtre
+            mingw-w64-ucrt-x86_64-libsystre
+
+      # MSYS2's UCRT64 repo happens to package the exact SDL3 release this
+      # project is pinned to (3.4.12) -- unlike linux.yml/macos.yml this does
+      # not build SDL3 from source, since there is no separate "system SDL3
+      # might be some other version" risk to guard against here.
+      - name: Confirm the packaged SDL3 matches the pin (release-3.4.12)
+        run: pacman -Q mingw-w64-ucrt-x86_64-sdl3 | grep -qE ' 3\.4\.12-'
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DWITH_COCO_ROMS=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
