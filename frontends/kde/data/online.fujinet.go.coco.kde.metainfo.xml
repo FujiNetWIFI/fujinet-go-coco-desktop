@@ -47,9 +47,17 @@
     <release version="0.2.2" date="2026-08-02">
       <description>
         <p>
-          Fixed a debugger video pane bug where the Color Computer 3's
-          16-colour, 16-byte-per-row graphics modes showed corrupted pixel
-          data instead of matching what the real GIME chip renders.
+          Fixed the debugger's video pane rendering a corrupted picture on
+          the Color Computer 3. Its GIME scanline counter never restarted at
+          each character row, so the pane read screen memory several times
+          too fast and drew glyph rows that do not exist; Color Computer 2
+          machines were unaffected.
+        </p>
+        <p>
+          The same pane now also honours the GIME's horizontal offset and
+          256-byte virtual-screen registers, and reproduces the hardware
+          quirk that blanks half the data in 16-colour, 16-byte-per-row
+          graphics modes.
         </p>
       </description>
     </release>

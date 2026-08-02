@@ -351,25 +351,40 @@ static void resolve_gime_palette(cocodebug *d, uint32_t pal[16])
  * with no XRoar patch needed. bank is always 0: the DAT board that would
  * make it otherwise only exists for >512K configurations, which this port
  * does not offer. */
-static void gime_vram_read(struct ram *ram, uint32_t addr, uint8_t *dst,
-                           int n)
+static void gime_vram_read(struct ram *ram, uint32_t base, unsigned xoff,
+                           uint8_t *dst, int n)
 {
     int i;
 
     for (i = 0; i < n; i++) {
-        uint32_t a = addr + (uint32_t)i;
+        /* GIME fetches one 16-bit word at a time, adding HOFF's X to the
+         * base per fetch and wrapping it within 256 bytes -- tcc1014.c
+         * fetch_byte_vram() calls fetch_vram(B + (Xoff & 0xff)) with Xoff
+         * seeded from X at each scanline (do_vb_irq) and advanced by 2 per
+         * word. X is always even ((val & 0x7f) << 1 on register write), so
+         * every word address is even and byte i of the row is just the
+         * low/high half of the word at offset (i & ~1). */
+        uint32_t a = base + ((xoff + (unsigned)(i & ~1)) & 0xffu) +
+                     (uint32_t)(i & 1);
         uint8_t *vp = ram_a8(ram, 0, a & ~1u, a >> 9);
         dst[i] = vp ? vp[a & 1u] : 0;
     }
 }
 
 /* Simulates GIME's per-scanline row/address-advance state machine
- * (tcc1014.c's do_hb_irq/do_vb_irq): "row" is a 4-bit counter that wraps
- * unconditionally, and the video address advances by row_stride whenever
- * the counter satisfies (row & rowmask) == rowmask -- not a fixed divisor,
- * which is why this is simulated rather than computed in closed form.
- * Writes one base address and one row value (the font/zone row to decode
- * that scanline's bytes with) per output scanline. */
+ * (tcc1014.c's do_hb_irq/do_vb_irq). do_hb_irq increments a 4-bit "row"
+ * counter at the end of each scanline; do_vb_irq then RESETS it to 0 and
+ * advances the video address by row_stride whenever the counter satisfies
+ * (row & rowmask) == rowmask. The reset is what makes rowmask behave as a
+ * lines-per-row selector (LPR_rowmask[] {0,1,2,8,9,10,11,16} -> 1,2,3,8,9,
+ * 10,11 lines) rather than a bit test against a free-running counter:
+ * without it, rowmask 8 would advance on eight scanlines out of every
+ * sixteen instead of once every eight, and row would run past a glyph's 12
+ * font rows. That is not a fixed divisor, which is why this is simulated
+ * rather than computed in closed form. LPR==7 (rowmask 16) never matches a
+ * 4-bit row, so it neither resets nor advances -- matching the explicit
+ * LPR==7 case in do_vb_irq. Writes one base address and one row value (the
+ * font/zone row to decode that scanline's bytes with) per output scanline. */
 static void gime_row_addresses(uint32_t base, unsigned rowmask,
                                unsigned row_stride, unsigned start_row,
                                int total_rows, uint32_t *addr_out,
@@ -383,8 +398,10 @@ static void gime_row_addresses(uint32_t base, unsigned rowmask,
         addr_out[i] = addr;
         row_out[i] = row;
         row = (row + 1) & 15;
-        if ((row & rowmask) == rowmask)
+        if ((row & rowmask) == rowmask) {
+            row = 0;
             addr += row_stride;
+        }
     }
 }
 
@@ -438,7 +455,11 @@ static int decode_gime_coco(struct TCC1014 *gime, struct MC6821 *pia1,
     rowmask = nA_G ? sam_v_rowmask[st.SAM_V & 7] : vsc_rowmask[st.VSC & 15];
     base = (st.Y & 0x701ffu) | ((uint32_t)st.SAM_F << 9);
 
-    gime_row_addresses(base, rowmask, bpr, 0, VDG_CANVAS_H, addr, rowv);
+    /* HVEN selects a fixed 256-byte "horizontal virtual screen" stride in
+     * place of BPR -- do_vb_irq()'s row_stride assignment applies that to
+     * COCO mode too, not just GIME's native modes. */
+    gime_row_addresses(base, rowmask, st.HVEN ? 256u : bpr, 0, VDG_CANVAS_H,
+                       addr, rowv);
 
     native_w = bpr * (nA_G ? (GM0 ? 8 : 4) : 8);
     scale_x = VDG_CANVAS_W / native_w;
@@ -448,7 +469,7 @@ static int decode_gime_coco(struct TCC1014 *gime, struct MC6821 *pia1,
         int col;
 
         if (addr[y] != last_addr) {
-            gime_vram_read(ram, addr[y], rowbuf, (int)bpr);
+            gime_vram_read(ram, addr[y], st.X, rowbuf, (int)bpr);
             last_addr = addr[y];
         }
 
@@ -560,7 +581,7 @@ static int decode_gime_native(struct TCC1014 *gime, struct ram *ram,
 
     bpr = st.BP ? hres_bpr_gfx[st.HRES & 7] : hres_bpr_text[st.HRES & 7];
     rowmask = lpr_rowmask[st.LPR & 7];
-    row_stride = st.BP ? bpr : (bpr << (st.CRES & 1));
+    row_stride = st.HVEN ? 256u : (st.BP ? bpr : (bpr << (st.CRES & 1)));
 
     /* VRES_LPF_lAA[4] in tcc1014.c: {192, 199, 65535 ("infinite", no
      * vertical blanking), 225}. The infinite case is clamped to the
@@ -610,7 +631,7 @@ static int decode_gime_native(struct TCC1014 *gime, struct ram *ram,
             fetch_bpr = (unsigned)sizeof(rowbuf);
 
         if (addr[y] != last_addr) {
-            gime_vram_read(ram, addr[y], rowbuf, (int)fetch_bpr);
+            gime_vram_read(ram, addr[y], st.X, rowbuf, (int)fetch_bpr);
             last_addr = addr[y];
 
             /* GIME fetches VRAM 16 bits at a time via fetch_byte_vram();
