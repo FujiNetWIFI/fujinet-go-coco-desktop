@@ -530,6 +530,23 @@ M10 (part) macOS and Windows frontends, remaining debugger windows, polish.
     linked and no_embedded_roms_fujinet-go-coco-windows ran against it and
     passed, confirmed from the log rather than assumed.
 
+    Settings window added afterwards (closing the gap this entry originally
+    flagged), plain Win32 controls (a combobox + checkboxes on a small
+    top-level window, no dialog-resource template) built the same way the
+    debugger window's controls are: Aspect ratio/Smooth scaling apply live,
+    FujiNet/Sound/Gamepads are collected and applied by restarting the
+    session on WM_DESTROY, matching GNOME's Preferences dialog keys and
+    defaults (frontends/gnome/prefs.c) so a machine configured in one
+    frontend shows up the same in another.
+
+    Same pass also caught and fixed a real cross-frontend bug: dest_rect's
+    aspect_mode values had been ported straight from ADAM's own convention
+    (0=native, 1=TV 4:3), but GNOME's actual CocoAspectMode
+    (frontends/gnome/display.h) is 0=TV 4:3, 1=square pixels -- backwards
+    for two of the three values. Fixed in both this file and the macOS
+    DisplayView.m at the same time (found while building the Settings
+    window's aspect-ratio combo, whose item order needed to match).
+
     macOS frontend done: frontends/macos/{main.m,AppDelegate.{h,m},
     DisplayView.{h,m},debugger/DebuggerWindow.{h,m},Info.plist.in,
     CMakeLists.txt} + data/icons/fujinet-go-coco.icns, native AppKit
@@ -565,10 +582,15 @@ M10 (part) macOS and Windows frontends, remaining debugger windows, polish.
         Windows' external-browser-only choice): WebKit.framework ships
         with macOS at zero bundle-size cost, so the KDE-vs-GNOME size
         trade-off that made Windows skip it does not apply here.
-      * No Settings/Preferences window in this pass, deliberately matching
-        Windows' own scope -- aspect_mode/smooth_scaling are read once at
-        launch and not exposed for changing. A real gap shared with
-        Windows, not macOS-specific, worth a follow-up for both.
+      * Settings window (done, closing the gap this entry originally
+        flagged): a scaled-down port of ADAM's own NSGridView-based
+        showSettings: -- Aspect ratio/Smooth scaling (live) and FujiNet/
+        Sound/Gamepads (collected, applied by restarting the session in
+        windowWillClose:, same as ADAM's _machineDirty pattern) -- with
+        ADAM's machine/palette/expansion/joystick-mode/keypad rows dropped
+        entirely (no CoCo equivalent) and Machine/TV input/Artifact
+        Colour/CPU not duplicated (already live in the main menu). ⌘, in
+        the App menu, matching ADAM's placement and Mac convention.
       * Same debugger WM_CLOSE-equivalent fix as Windows:
         windowShouldClose: calls cocodebug_set_engaged(_dbg, 0) before
         hiding (returns NO, keeping the window alive for F12 to reshow),

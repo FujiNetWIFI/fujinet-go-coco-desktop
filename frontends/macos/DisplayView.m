@@ -171,8 +171,14 @@ static CVReturn link_cb(CVDisplayLinkRef link, const CVTimeStamp *now,
         dw = scale * _fbW;
         dh = scale * _fbH;
     } else {
+        /* 0 = TV 4:3 (the default), 1 = square pixels (the frame's own
+         * aspect) -- matching the GNOME frontend's own convention
+         * (frontends/gnome/display.h's CocoAspectMode; "aspect_mode" is
+         * just a plain settings int, not an enum cocosession.h itself
+         * defines), not a fixed "0 = native" the way ADAM's own
+         * aspect_mode happens to read. */
         const CGFloat aspect =
-            _aspectMode == 1 ? 4.0 / 3.0 : (CGFloat)_fbW / _fbH;
+            _aspectMode == 0 ? 4.0 / 3.0 : (CGFloat)_fbW / _fbH;
         if (w / h > aspect) {
             dh = h;
             dw = h * aspect;

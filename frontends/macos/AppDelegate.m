@@ -51,6 +51,8 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSWindow *_logWindow;
     NSTextView *_logView;
     NSTimer *_logTimer;
+    NSWindow *_settingsWindow;
+    BOOL _sessionDirty;
 }
 
 - (instancetype)initWithSession:(cocosession *)session
@@ -76,6 +78,162 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 {
     [_display setAspectMode:cocosession_get_int(_session, "aspect_mode", 0)];
     [_display setSmooth:cocosession_get_int(_session, "smooth_scaling", 0)];
+}
+
+/* ---- settings ----------------------------------------------------------------
+ * Aspect ratio and smooth scaling apply live; FujiNet/Sound/Gamepads decide
+ * what the session starts with, so -- like GNOME's Preferences dialog
+ * (frontends/gnome/prefs.c), same keys and defaults, so a machine
+ * configured in one frontend shows up the same in another -- those three
+ * are collected while the window is open and applied in one restart when it
+ * closes, mirroring ADAM's own Settings window
+ * (fujinet-go-adam-desktop/frontends/macos/AppDelegate.m's showSettings:).
+ * Machine/TV input/Artifact Colour/CPU are not duplicated here: they
+ * already live in the main menu as live radio groups; ADAM's machine/
+ * palette/expansion/joystick-mode/keypad rows have no CoCo equivalent at
+ * all and are dropped rather than translated. */
+
+static NSArray<NSString *> *sessionSettingKeys(void)
+{
+    static NSArray<NSString *> *keys;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      keys = @[ @"enable_fujinet", @"enable_audio", @"enable_gamepad" ];
+    });
+    return keys;
+}
+
+- (NSTextField *)sectionLabel:(NSString *)title
+{
+    NSTextField *label = [NSTextField labelWithString:title];
+    label.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    return label;
+}
+
+- (NSPopUpButton *)popUpForKey:(const char *)key
+                       fallback:(int)def
+                          items:(NSArray<NSString *> *)items
+{
+    NSPopUpButton *popup = [[NSPopUpButton alloc] init];
+    [popup addItemsWithTitles:items];
+    NSInteger current = cocosession_get_int(_session, key, def);
+    if (current < 0 || current >= (NSInteger)items.count)
+        current = def;
+    [popup selectItemAtIndex:current];
+    popup.identifier = @(key);
+    popup.target = self;
+    popup.action = @selector(settingChanged:);
+    return popup;
+}
+
+- (NSButton *)checkBoxForKey:(const char *)key fallback:(int)def
+{
+    NSButton *box = [NSButton checkboxWithTitle:@""
+                                         target:self
+                                         action:@selector(settingChanged:)];
+    box.state = cocosession_get_int(_session, key, def)
+                    ? NSControlStateValueOn
+                    : NSControlStateValueOff;
+    box.identifier = @(key);
+    return box;
+}
+
+- (void)settingChanged:(id)sender
+{
+    NSControl *control = sender;
+    NSString *key = control.identifier;
+    int value;
+
+    if ([control isKindOfClass:[NSPopUpButton class]])
+        value = (int)((NSPopUpButton *)control).indexOfSelectedItem;
+    else
+        value = ((NSButton *)control).state == NSControlStateValueOn ? 1 : 0;
+
+    cocosession_set_int(_session, key.UTF8String, value);
+
+    if ([sessionSettingKeys() containsObject:key])
+        _sessionDirty = YES;
+    else
+        [self applyDisplaySettings];
+}
+
+- (void)showSettings:(id)sender
+{
+    (void)sender;
+    if (_settingsWindow) {
+        [_settingsWindow makeKeyAndOrderFront:nil];
+        return;
+    }
+
+    NSArray<NSArray<NSView *> *> *rows = @[
+        @[ [self sectionLabel:@"Display"], [NSTextField labelWithString:@""] ],
+        @[
+            [NSTextField labelWithString:@"Aspect ratio"],
+            [self popUpForKey:"aspect_mode"
+                     fallback:0
+                        items:@[
+                            @"TV (4:3)", @"Square pixels", @"Integer scale"
+                        ]]
+        ],
+        @[
+            [NSTextField labelWithString:@"Smooth scaling"],
+            [self checkBoxForKey:"smooth_scaling" fallback:0]
+        ],
+        @[ [self sectionLabel:@"FujiNet"], [NSTextField labelWithString:@""] ],
+        @[
+            [NSTextField labelWithString:@"FujiNet"],
+            [self checkBoxForKey:"enable_fujinet" fallback:1]
+        ],
+        @[
+            [NSTextField labelWithString:@"Sound"],
+            [self checkBoxForKey:"enable_audio" fallback:1]
+        ],
+        @[
+            [NSTextField labelWithString:@"Gamepads"],
+            [self checkBoxForKey:"enable_gamepad" fallback:1]
+        ],
+    ];
+
+    NSGridView *grid = [NSGridView gridViewWithViews:rows];
+    grid.rowSpacing = 8;
+    grid.columnSpacing = 12;
+    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+
+    NSTextField *note = [NSTextField
+        labelWithString:@"Display options apply immediately. FujiNet options "
+                        @"take effect when this window is closed."];
+    note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    note.textColor = NSColor.secondaryLabelColor;
+
+    NSStackView *root = [NSStackView stackViewWithViews:@[ grid, note ]];
+    root.orientation = NSUserInterfaceLayoutOrientationVertical;
+    root.alignment = NSLayoutAttributeLeading;
+    root.spacing = 12;
+    root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
+
+    _settingsWindow = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 420, 300)
+                  styleMask:NSWindowStyleMaskTitled |
+                            NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskMiniaturizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    _settingsWindow.title = @"Settings";
+    _settingsWindow.releasedWhenClosed = NO;
+    _settingsWindow.delegate = self;
+    _settingsWindow.contentView = root;
+    [_settingsWindow center];
+    [_settingsWindow makeKeyAndOrderFront:nil];
+}
+
+/* FujiNet options are collected while the window is open and applied in one
+ * restart when it closes. */
+- (void)windowWillClose:(NSNotification *)note
+{
+    if (note.object != _settingsWindow || !_sessionDirty)
+        return;
+    _sessionDirty = NO;
+    [self restartSession];
 }
 
 /* ---- actions ---------------------------------------------------------------- */
@@ -320,6 +478,11 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     [appMenu addItemWithTitle:[@"About " stringByAppendingString:appName]
                        action:@selector(orderFrontStandardAboutPanel:)
                 keyEquivalent:@""];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+
+    [appMenu addItem:[self item:@"Settings…"
+                         action:@selector(showSettings:)
+                            key:@","]];
     [appMenu addItem:[NSMenuItem separatorItem]];
 
     NSMenu *servicesMenu = [[NSMenu alloc] initWithTitle:@"Services"];

@@ -129,8 +129,15 @@ static RECT dest_rect(int cw, int ch, int fb_w, int fb_h)
         dw = scale * fb_w;
         dh = scale * fb_h;
     } else {
+        /* 0 = TV 4:3 (the default), 1 = square pixels (the frame's own
+         * aspect) -- matching the GNOME frontend's own convention
+         * (frontends/gnome/display.h's CocoAspectMode; "aspect_mode" is
+         * just a plain settings int, not an enum cocosession.h itself
+         * defines, so nothing enforces this across frontends except doing
+         * it the same way everywhere), not a fixed "0 = native" the way
+         * ADAM's own aspect_mode happens to read. */
         double aspect =
-            g_aspect_mode == 1 ? 4.0 / 3.0 : (double)fb_w / fb_h;
+            g_aspect_mode == 0 ? 4.0 / 3.0 : (double)fb_w / fb_h;
         if ((double)cw / ch > aspect) {
             dh = ch;
             dw = ch * aspect;
@@ -556,6 +563,8 @@ static HMENU build_menu(void)
                       (unsigned)(IDM_MACHINE_BASE + m));
     AppendMenuA(machine, MF_STRING, IDM_RESET, "Reset");
     AppendMenuA(machine, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(machine, MF_STRING, IDM_SETTINGS, "Settings...");
+    AppendMenuA(machine, MF_SEPARATOR, 0, NULL);
     AppendMenuA(machine, MF_STRING, IDM_EXIT, "E&xit");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)machine, "&Machine");
 
@@ -607,6 +616,163 @@ static void apply_display_settings(void)
     g_smooth = cocosession_get_int(g_session, "smooth_scaling", 0);
 }
 
+/* ---- settings window ---------------------------------------------------------
+ * Aspect ratio and smooth scaling apply live; FujiNet/Sound/Gamepads decide
+ * what the session starts with, so -- like GNOME's Preferences dialog
+ * (frontends/gnome/prefs.c), same keys and defaults, so a machine
+ * configured in one frontend shows up the same in another -- they are
+ * applied by restarting the session when this window closes. Machine/TV
+ * input/Artifact Colour/CPU are not duplicated here: they already live in
+ * the main menu as live radio groups. */
+
+static HWND g_settings_window;
+static int g_settings_dirty;
+
+static void settings_apply_checkbox(HWND hwnd, int id, const char *key,
+                                    int def)
+{
+    int on = SendMessageA(GetDlgItem(hwnd, id), BM_GETCHECK, 0, 0) ==
+            BST_CHECKED;
+    if (cocosession_get_int(g_session, key, def) != on) {
+        cocosession_set_int(g_session, key, on);
+        g_settings_dirty = 1;
+    }
+}
+
+static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
+                                      LPARAM lp)
+{
+    switch (msg) {
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDC_SET_ASPECT:
+            if (HIWORD(wp) == CBN_SELCHANGE) {
+                int sel = (int)SendMessageA(GetDlgItem(hwnd, IDC_SET_ASPECT),
+                                            CB_GETCURSEL, 0, 0);
+                cocosession_set_int(g_session, "aspect_mode", sel);
+                apply_display_settings();
+                InvalidateRect(g_hwnd, NULL, FALSE);
+            }
+            return 0;
+        case IDC_SET_SMOOTH: {
+            int on = SendMessageA(GetDlgItem(hwnd, IDC_SET_SMOOTH),
+                                  BM_GETCHECK, 0, 0) == BST_CHECKED;
+            cocosession_set_int(g_session, "smooth_scaling", on);
+            apply_display_settings();
+            InvalidateRect(g_hwnd, NULL, FALSE);
+            return 0;
+        }
+        case IDC_SET_FUJINET:
+            settings_apply_checkbox(hwnd, IDC_SET_FUJINET, "enable_fujinet", 1);
+            return 0;
+        case IDC_SET_AUDIO:
+            settings_apply_checkbox(hwnd, IDC_SET_AUDIO, "enable_audio", 1);
+            return 0;
+        case IDC_SET_GAMEPAD:
+            settings_apply_checkbox(hwnd, IDC_SET_GAMEPAD, "enable_gamepad", 1);
+            return 0;
+        default:
+            break;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        g_settings_window = NULL;
+        if (g_settings_dirty) {
+            g_settings_dirty = 0;
+            restart_session();
+        }
+        return 0;
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+static HWND settings_checkbox(HWND parent, HINSTANCE inst, const char *text,
+                              int id, int y, int checked)
+{
+    HWND h = CreateWindowExA(0, "BUTTON", text,
+                             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 16, y,
+                             320, 22, parent, (HMENU)(INT_PTR)id, inst, NULL);
+    SendMessageA(h, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageA(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT),
+                TRUE);
+    return h;
+}
+
+static void show_settings(HINSTANCE inst)
+{
+    static const char *const aspect_names[] = {
+        "TV (4:3)", "Square pixels", "Integer scale"
+    };
+    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HWND combo, note;
+    int y = 16, i;
+
+    if (g_settings_window) {
+        SetForegroundWindow(g_settings_window);
+        return;
+    }
+    {
+        static int registered;
+        if (!registered) {
+            WNDCLASSA wc;
+            memset(&wc, 0, sizeof(wc));
+            wc.lpfnWndProc = settings_proc;
+            wc.hInstance = inst;
+            wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+            wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+            wc.lpszClassName = "CocoSettingsWindow";
+            RegisterClassA(&wc);
+            registered = 1;
+        }
+    }
+    g_settings_window = CreateWindowA(
+        "CocoSettingsWindow", "Settings",
+        WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME),
+        CW_USEDEFAULT, CW_USEDEFAULT, 380, 300, NULL, NULL, inst, NULL);
+
+    CreateWindowExA(0, "STATIC", "Aspect ratio:", WS_CHILD | WS_VISIBLE, 16,
+                    y, 120, 20, g_settings_window, NULL, inst, NULL);
+    combo = CreateWindowExA(
+        0, "COMBOBOX", "",
+        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_VSCROLL, 140, y - 2,
+        200, 200, g_settings_window, (HMENU)(INT_PTR)IDC_SET_ASPECT, inst,
+        NULL);
+    for (i = 0; i < (int)(sizeof(aspect_names) / sizeof(aspect_names[0])); i++)
+        SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)aspect_names[i]);
+    SendMessageA(combo, CB_SETCURSEL,
+                (WPARAM)cocosession_get_int(g_session, "aspect_mode", 0), 0);
+    SendMessageA(combo, WM_SETFONT, (WPARAM)font, TRUE);
+    y += 32;
+
+    settings_checkbox(g_settings_window, inst, "Smooth scaling",
+                      IDC_SET_SMOOTH, y,
+                      cocosession_get_int(g_session, "smooth_scaling", 0));
+    y += 36;
+
+    note = CreateWindowExA(
+        0, "STATIC",
+        "FujiNet options apply by restarting the session when this window "
+        "closes:",
+        WS_CHILD | WS_VISIBLE, 16, y, 340, 32, g_settings_window,
+        (HMENU)(INT_PTR)IDC_SET_NOTE, inst, NULL);
+    SendMessageA(note, WM_SETFONT, (WPARAM)font, TRUE);
+    y += 36;
+
+    settings_checkbox(g_settings_window, inst, "FujiNet", IDC_SET_FUJINET, y,
+                      cocosession_get_int(g_session, "enable_fujinet", 1));
+    y += 28;
+    settings_checkbox(g_settings_window, inst, "Sound", IDC_SET_AUDIO, y,
+                      cocosession_get_int(g_session, "enable_audio", 1));
+    y += 28;
+    settings_checkbox(g_settings_window, inst, "Gamepads", IDC_SET_GAMEPAD, y,
+                      cocosession_get_int(g_session, "enable_gamepad", 1));
+
+    ShowWindow(g_settings_window, SW_SHOW);
+}
+
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -653,6 +819,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             rebuild_menu(hwnd);
         } else switch (id) {
         case IDM_RESET:          cocosession_reset(g_session); break;
+        case IDM_SETTINGS:
+            show_settings((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
+            break;
         case IDM_IMPORT_MEDIA:   import_media(hwnd); break;
         case IDM_IMPORT_ROMS:    import_roms(hwnd); break;
         case IDM_FUJINET_CONFIG: show_fujinet_config(); break;

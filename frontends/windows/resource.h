@@ -19,6 +19,15 @@
 #define IDM_DEBUGGER       207
 #define IDM_ABOUT          208
 #define IDM_EXIT           209
+#define IDM_SETTINGS       210
+
+/* Settings window child control ids. */
+#define IDC_SET_ASPECT     220
+#define IDC_SET_SMOOTH     221
+#define IDC_SET_FUJINET    222
+#define IDC_SET_AUDIO      223
+#define IDC_SET_GAMEPAD    224
+#define IDC_SET_NOTE       225
 
 #define IDM_MACHINE_BASE   300
 #define IDM_TVINPUT_BASE   320
