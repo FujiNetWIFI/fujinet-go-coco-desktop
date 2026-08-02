@@ -1,0 +1,68 @@
+name: macOS
+
+# Second of the M7 CI jobs (see TODO). No macOS frontend exists yet (M10), so
+# FRONTEND=all (the default) just builds core + the FujiNet runtime + the
+# test suite -- add_frontend() in the top-level CMakeLists.txt skips a
+# frontend directory that has no CMakeLists.txt yet rather than failing the
+# configure. This still exercises everything this milestone's work touches
+# (the disassembler, the debugger engine, the session/host layer, symtab)
+# on a second OS and compiler (Apple clang) ahead of M10 actually needing it.
+#
+# WITH_COCO_ROMS=OFF for the same reason as linux.yml: the system ROMs are
+# not freely redistributable (see COMPLIANCE.md), so CI never has them, and
+# boot_smoke/drivewire_smoke/debug/cpu_switch/video_coco3/video_coco2 report
+# ctest's skip code (77) rather than actually running.
+#
+# WITH_FUJINET is left at its default (ON): tools/fujinet/build-fujinet-
+# desktop.sh already has Darwin-specific handling (libfujinet.dylib, and it
+# always builds mbedTLS 3.6.5 from source on Darwin rather than trusting a
+# system copy), so this is meant to work here, not just on Linux.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    # SDL3 installs to a non-standard prefix (see below), so every step that
+    # runs a linked binary -- configure-time checks as well as ctest -- needs
+    # the loader to find it there.
+    env:
+      DYLD_LIBRARY_PATH: /tmp/sdl3-install/lib
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install cmake ninja python3
+
+      # SDL3 is too new to assume a Homebrew formula matches the exact
+      # version this project is developed and tested against; built from
+      # source and pinned, the same "pin what matters" policy as XRoar (SHA256
+      # tarball) and the FujiNet firmware (pinned commit) elsewhere in this
+      # build -- and the same recipe linux.yml uses.
+      - name: Build and install SDL3 (release-3.4.12, pinned)
+        run: |
+          git clone --depth 1 --branch release-3.4.12 \
+            https://github.com/libsdl-org/SDL.git /tmp/sdl3-src
+          cmake -S /tmp/sdl3-src -B /tmp/sdl3-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/sdl3-install \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF
+          cmake --build /tmp/sdl3-build
+          cmake --install /tmp/sdl3-build
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_PREFIX_PATH=/tmp/sdl3-install \
+            -DWITH_COCO_ROMS=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure
