@@ -242,6 +242,7 @@ add_library(cocosession STATIC
   debugger/debugger.c
   debugger/m6809dasm.c
   debugger/cocovideo.c
+  debugger/symtab.c
   "${COCO_ROMS_C}"
 )
 
@@ -293,6 +294,10 @@ add_executable(dasm_test tests/dasm_test.c)
 target_link_libraries(dasm_test cocosession)
 target_include_directories(dasm_test PRIVATE debugger)
 
+add_executable(symtab_test tests/symtab_test.c)
+target_link_libraries(symtab_test cocosession)
+target_include_directories(symtab_test PRIVATE debugger)
+
 add_executable(session_test tests/session_test.c)
 target_link_libraries(session_test cocosession)
 
@@ -307,6 +312,7 @@ target_include_directories(video_test PRIVATE src)
 add_test(NAME input COMMAND input_test)
 add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
+add_test(NAME symtab COMMAND symtab_test)
 add_test(NAME debug COMMAND debug_test)
 add_test(NAME cpu_switch COMMAND cpu_switch_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)

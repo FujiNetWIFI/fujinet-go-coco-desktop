@@ -89,6 +89,27 @@ int cocodebug_read(cocodebug *d, uint16_t addr, uint8_t *dst, int n);
 int cocodebug_disassemble(cocodebug *d, uint16_t addr, coco_dasm_line *out,
                           int max);
 
+/* ---- symbols --------------------------------------------------------------
+ * A small built-in table of well-known Color BASIC ROM entry points (see
+ * core/debugger/symtab.c for exactly which, and why only those), plus
+ * whatever the caller loads on top. Available regardless of pause state --
+ * this is just a name<->address mapping, not machine state. */
+
+/* Loads a symbol file on top of the built-in table (and anything already
+ * loaded): LWASM's `--symbol-dump` format ("NAME EQU $ADDR" per line) or a
+ * plain "NAME ADDR" (hex with an optional $/0x prefix, or decimal).
+ * Returns the number of symbols loaded, or -1 if the file could not be
+ * opened. */
+int cocodebug_symbols_load(cocodebug *d, const char *path);
+/* Drops everything cocodebug_symbols_load added; the built-in table stays. */
+void cocodebug_symbols_clear(cocodebug *d);
+/* Exact-address lookup, e.g. to annotate a disassembly line. Returns 1 and
+ * fills dst (truncated to dstsz) when addr has a symbol, 0 otherwise. */
+int cocodebug_symbol_at(cocodebug *d, uint16_t addr, char *dst, int dstsz);
+/* Name -> address, case-sensitive exact match. For a "Go to address" field
+ * that also accepts a symbol name. */
+int cocodebug_symbol_find(cocodebug *d, const char *name, uint16_t *addr_out);
+
 /* ---- breakpoints -------------------------------------------------------- */
 /* Returns 1 when the breakpoint is now set, 0 when it was cleared, -1 when
  * the table is full. Safe while running. */

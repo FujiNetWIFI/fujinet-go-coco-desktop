@@ -130,6 +130,8 @@ static void refresh_disasm(DebuggerUI *ui)
         GtkWidget *label = gtk_label_new(NULL);
         g_autofree char *bytes = g_strdup("");
         g_autofree char *text = NULL;
+        char symname[32];
+        g_autofree char *symsuffix = NULL;
         int b;
 
         for (b = 0; b < l->len; b++) {
@@ -137,13 +139,16 @@ static void refresh_disasm(DebuggerUI *ui)
             bytes = g_strdup_printf("%s%02X", prev, l->bytes[b]);
         }
 
+        symsuffix = cocodebug_symbol_at(ui->dbg, l->addr, symname, sizeof(symname))
+                       ? g_strdup_printf("   ; %s", symname) : g_strdup("");
+
         /* ">" is where the CPU is; "*" is a breakpoint. Both in the same
          * column so the addresses stay aligned. */
-        text = g_strdup_printf("%c%c %04X  %-10s %s",
+        text = g_strdup_printf("%c%c %04X  %-10s %s%s",
                                (l->addr == r.pc) ? '>' : ' ',
                                cocodebug_breakpoint_is_set(ui->dbg, l->addr)
                                    ? '*' : ' ',
-                               l->addr, bytes, l->text);
+                               l->addr, bytes, l->text, symsuffix);
         gtk_label_set_text(GTK_LABEL(label), text);
         gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
         gtk_widget_add_css_class(label, "monospace");
@@ -282,6 +287,57 @@ static void on_clear_bp(GtkButton *b, gpointer u)
     ui->seen_serial = 0; /* redraw the markers */
 }
 
+static void load_symbols_done(GObject *source, GAsyncResult *result,
+                              gpointer user_data)
+{
+    DebuggerUI *ui = user_data;
+    g_autoptr(GFile) file =
+        gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
+    g_autofree char *path = NULL;
+    int n;
+
+    if (!file)
+        return;
+    path = g_file_get_path(file);
+    if (!path)
+        return;
+    n = cocodebug_symbols_load(ui->dbg, path);
+    if (n < 0) {
+        gtk_label_set_text(ui->status, "Could not open symbol file");
+        return;
+    }
+    ui->seen_serial = 0; /* redraw the disassembly with the new labels */
+}
+
+static void on_load_symbols(GtkButton *button, gpointer user_data)
+{
+    DebuggerUI *ui = user_data;
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    GtkFileFilter *filter = gtk_file_filter_new();
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    (void)button;
+
+    /* LWASM's --symbol-dump has no fixed convention, but .sym is what people
+     * actually name these; the dialog still shows every file if asked. */
+    gtk_file_filter_set_name(filter, "Symbol files");
+    gtk_file_filter_add_suffix(filter, "sym");
+    gtk_file_filter_add_pattern(filter, "*");
+    g_list_store_append(filters, filter);
+    gtk_file_dialog_set_title(dialog, "Load Symbols");
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+    gtk_file_dialog_open(dialog, ui->window, NULL, load_symbols_done, ui);
+    g_object_unref(filters);
+    g_object_unref(dialog);
+}
+
+static void on_clear_symbols(GtkButton *b, gpointer u)
+{
+    DebuggerUI *ui = u;
+    (void)b;
+    cocodebug_symbols_clear(ui->dbg);
+    ui->seen_serial = 0;
+}
+
 static void go_to_mem_addr(DebuggerUI *ui)
 {
     const char *text = gtk_editable_get_text(GTK_EDITABLE(ui->mem_addr));
@@ -415,6 +471,17 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
                    tool_button("_Clear Breakpoints",
                                "Remove every breakpoint",
                                G_CALLBACK(on_clear_bp), ui));
+    gtk_box_append(GTK_BOX(bar),
+                   tool_button("Load _Symbols…",
+                               "Load a symbol file (LWASM --symbol-dump, or "
+                               "plain \"NAME ADDR\" lines) to label the "
+                               "disassembly",
+                               G_CALLBACK(on_load_symbols), ui));
+    gtk_box_append(GTK_BOX(bar),
+                   tool_button("Clear S_ymbols",
+                               "Drop loaded symbols, keeping the built-in "
+                               "Color BASIC entry points",
+                               G_CALLBACK(on_clear_symbols), ui));
 
     ui->disasm = GTK_LIST_BOX(gtk_list_box_new());
     gtk_list_box_set_selection_mode(ui->disasm, GTK_SELECTION_NONE);

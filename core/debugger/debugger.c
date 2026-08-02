@@ -36,6 +36,7 @@
 #include "compat.h"
 #include "m6809dasm.h"
 #include "session_internal.h"
+#include "symtab.h"
 
 struct cocodebug {
     cocosession *s;
@@ -64,6 +65,10 @@ struct cocodebug {
      * CoCo 3 switch and the hook goes with it, so this is re-checked every
      * frame rather than installed once. */
     struct MC6809 *hooked_cpu;
+
+    /* Name<->address table for annotating the disassembly view. Not tied to
+     * pause state or the machine, so it needs none of the locking above. */
+    cocosymtab *symtab;
 };
 
 /* ---- reaching the machine ----------------------------------------------
@@ -163,6 +168,7 @@ cocodebug *cocodebug_create(cocosession *s)
     d->transient_bp = -1;
     pthread_mutex_init(&d->mtx, NULL);
     coco_cond_init_monotonic(&d->cv);
+    d->symtab = cocosymtab_create();
     return d;
 }
 
@@ -170,9 +176,34 @@ void cocodebug_destroy(cocodebug *d)
 {
     if (!d)
         return;
+    cocosymtab_destroy(d->symtab);
     pthread_mutex_destroy(&d->mtx);
     pthread_cond_destroy(&d->cv);
     free(d);
+}
+
+/* ---- symbols -------------------------------------------------------------
+ * UI-thread only, like everything else that is not marked otherwise; the
+ * table itself has nothing to do with the paused/running machine. */
+
+int cocodebug_symbols_load(cocodebug *d, const char *path)
+{
+    return d ? cocosymtab_load(d->symtab, path) : -1;
+}
+
+void cocodebug_symbols_clear(cocodebug *d)
+{
+    if (d) cocosymtab_clear_user(d->symtab);
+}
+
+int cocodebug_symbol_at(cocodebug *d, uint16_t addr, char *dst, int dstsz)
+{
+    return d ? cocosymtab_lookup_addr(d->symtab, addr, dst, dstsz) : 0;
+}
+
+int cocodebug_symbol_find(cocodebug *d, const char *name, uint16_t *addr_out)
+{
+    return d ? cocosymtab_lookup_name(d->symtab, name, addr_out) : 0;
 }
 
 void cocodebug_resume_for_stop(cocodebug *d)

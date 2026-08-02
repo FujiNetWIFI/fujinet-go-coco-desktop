@@ -146,12 +146,34 @@ Next
 
 M6 (in progress) The disassembler (6809 and 6309), the engine, both Linux
     debugger windows, their memory panes and the video pane are done. Live
-    6309 machine selection is done too. Still open:
-      * Symbol tables. The Apple II port loads AppleWin's .SYM files; there
-        is no equivalent shipped with XRoar, so this needs a source deciding
-        first (HDB-DOS and Super Extended BASIC entry points would be the
-        useful ones).
+    6309 machine selection and symbol tables are done too. Still open:
       * The macOS and Windows debugger windows, with those frontends (M10).
+
+    Symbol tables: core/debugger/symtab.c (private; cocodebug_symbol_at()/
+    cocodebug_symbol_find()/cocodebug_symbols_load()/cocodebug_symbols_
+    clear() in cocodebug.h are the public surface). Two sources merged into
+    one flat table, per the earlier "needs a source deciding first" note:
+      * Built in: six Color BASIC ROM entry points ($A000-$A00A -- POLCAT,
+        CHROUT, CSRDON, BLKIN, BLKOUT, JOYIN), sourced from Wikipedia's
+        "Color BASIC" article (cross-checked against computerarcheology.com/
+        CoCo/Hardware.html, which independently names the same six routines
+        in the same range) and confirmed live against this project's own
+        Super ECB ROM (core/tests: $A000 resolves to POLCAT, $A002 to
+        CHROUT). HDB-DOS's and Super ECB's OWN additional entry points are
+        deliberately NOT included: no equally authoritative primary source
+        (a ROM disassembly or vendor doc, not a secondary summary) was in
+        hand for those, and a wrong address in a debugger is worse than a
+        missing one -- a good follow-up if someone has HDB-DOS's actual
+        source or a verified disassembly.
+      * User-loadable: LWASM's `--symbol-dump` format, verified against a
+        real `lwasm --symbol-dump=file.sym` run rather than assumed --
+        "NAME EQU $ADDR" per line. A plain "NAME ADDR" (hex with $/0x, or
+        decimal) is also accepted for hand-written files. Loaded symbols
+        shadow built-in ones at the same address.
+    Both debugger windows get a disassembly annotation ("; NAME" appended to
+    any line whose address has a symbol) and Load Symbols…/Clear Symbols
+    toolbar buttons. core/tests/symtab_test.c covers the parser and lookup
+    rules with no XRoar/ROM dependency at all.
 
     Live CPU switching: cocosession_set_cpu()/cocosession_cpu() (core/
     include/cocosession.h), COCOSESSION_CPU_MC6809/HD6309, wired through

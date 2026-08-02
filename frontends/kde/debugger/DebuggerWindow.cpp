@@ -14,6 +14,7 @@
 
 #include "debugger/DebuggerWindow.h"
 
+#include <QFileDialog>
 #include <QFontDatabase>
 #include <QHBoxLayout>
 #include <QImage>
@@ -76,6 +77,18 @@ public:
                   QStringLiteral("Remove every breakpoint"), [this] {
                       cocodebug_breakpoint_clear_all(m_dbg);
                       m_seenSerial = 0; /* redraw the markers */
+                  });
+        addButton(bar, QStringLiteral("Load Symbols…"),
+                  QStringLiteral("Load a symbol file (LWASM --symbol-dump, "
+                                 "or plain \"NAME ADDR\" lines) to label the "
+                                 "disassembly"),
+                  [this] { loadSymbols(); });
+        addButton(bar, QStringLiteral("Clear Symbols"),
+                  QStringLiteral("Drop loaded symbols, keeping the built-in "
+                                 "Color BASIC entry points"),
+                  [this] {
+                      cocodebug_symbols_clear(m_dbg);
+                      m_seenSerial = 0;
                   });
         bar->addStretch();
         outer->addLayout(bar);
@@ -190,6 +203,20 @@ private:
         m_seenSerial = 0; /* force a redraw at the new address */
     }
 
+    void loadSymbols()
+    {
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("Load Symbols"), QString(),
+            QStringLiteral("Symbol files (*.sym);;All files (*)"));
+        if (path.isEmpty())
+            return;
+        if (cocodebug_symbols_load(m_dbg, path.toUtf8().constData()) < 0) {
+            m_status->setText(QStringLiteral("Could not open symbol file"));
+            return;
+        }
+        m_seenSerial = 0; /* redraw the disassembly with the new labels */
+    }
+
     void poll()
     {
         const uint64_t serial = cocodebug_stop_serial(m_dbg);
@@ -245,15 +272,20 @@ private:
             QString bytes;
             for (int b = 0; b < l.len; b++)
                 bytes += hex8(l.bytes[b]);
+            char symname[32];
+            const QString symSuffix =
+                cocodebug_symbol_at(m_dbg, l.addr, symname, sizeof(symname))
+                    ? QStringLiteral("   ; %1").arg(QString::fromUtf8(symname))
+                    : QString();
             /* ">" is where the CPU is, "*" a breakpoint, both in the same
              * column so the addresses stay aligned. */
             const QString text =
-                QStringLiteral("%1%2 %3  %4 %5")
+                QStringLiteral("%1%2 %3  %4 %5%6")
                     .arg(l.addr == r.pc ? QLatin1Char('>') : QLatin1Char(' '))
                     .arg(cocodebug_breakpoint_is_set(m_dbg, l.addr)
                              ? QLatin1Char('*') : QLatin1Char(' '))
                     .arg(hex16(l.addr), bytes.leftJustified(10),
-                         QString::fromUtf8(l.text));
+                         QString::fromUtf8(l.text), symSuffix);
             auto *item = new QListWidgetItem(text, m_disasm);
             item->setData(Qt::UserRole, (uint)l.addr);
         }
