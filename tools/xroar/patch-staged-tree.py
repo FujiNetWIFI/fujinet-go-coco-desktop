@@ -253,33 +253,75 @@ def register_modules(root: Path) -> None:
         ),
     ])
 
-    # src/xroar.c has several #ifdef WINDOWS32 blocks (the header include,
-    # console allocation, windows32_init()/windows32_shutdown() calls, ...)
-    # that are all about upstream's native win32 GUI module (ui_windows32),
-    # not "building for Windows" in general. Nothing here ever registers
-    # that module -- our own ui_desktop_module stands in for it, same as
-    # every other frontend -- so on Windows those blocks pulled in a header
-    # that itself wants SDL2 (sdl2/common.h) for no reason: we build
-    # SDL3-only, and would then need windows32_init()/_shutdown() (dialogs,
-    # menus, an About box) that nothing provides.
-    #
-    # WINDOWS32 still has to be defined globally (see generate_config_h) for
-    # the many OTHER upstream files -- becker.c, hkbd.c, joystick.c, path.c
-    # -- that key basic POSIX-vs-Winsock branching on it; only xroar.c's own
-    # GUI-specific uses need excluding, and #undef right after xroar.c's own
-    # includes does that in one place rather than patching each of its half
-    # dozen "#ifdef WINDOWS32" sites (fragile across an XRoar version bump).
+    # src/xroar.c's "#ifdef WINDOWS32" blocks are a mix of two different
+    # things, and only one of them applies to us:
+    #   * genuine POSIX-vs-Windows runtime differences (mkdir()'s signature,
+    #     "\\" vs "/" as the path separator, <direct.h>/<shlobj.h>) -- these
+    #     are correct as-is and must stay guarded on WINDOWS32 exactly like
+    #     upstream, the same as becker.c/hkbd.c/joystick.c/path.c elsewhere
+    #     (see generate_config_h for why WINDOWS32 has to stay defined).
+    #   * upstream's native win32 GUI module (ui_windows32) and its -C
+    #     console-allocation option: the header include (which itself wants
+    #     SDL2's sdl2/common.h -- we build SDL3-only), the alloc_console
+    #     variable and its two -C/-no-C command-line branches, and the
+    #     windows32_init()/windows32_shutdown() calls. Nothing here ever
+    #     registers that module -- our own ui_desktop_module stands in for
+    #     it, same as every other frontend -- so these need excluding
+    #     one at a time (an early attempt tried a single #undef WINDOWS32
+    #     right after the includes; that broke the FIRST kind too, since
+    #     the mkdir() branch is later in the same file and it is by no
+    #     means the only one of that kind).
     patch(root, "src/xroar.c", [
         (
             "#ifdef WINDOWS32\n"
             "#include \"windows32/common_windows32.h\"\n"
             "#endif\n",
-            "#ifdef XROAR_DESKTOP_MODULES\n"
-            "#undef WINDOWS32\n"
-            "#else\n"
-            "#ifdef WINDOWS32\n"
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
             "#include \"windows32/common_windows32.h\"\n"
-            "#endif\n"
+            "#endif\n",
+        ),
+        (
+            "#ifdef WINDOWS32\n"
+            "\tint alloc_console = -1;\n"
+            "#endif\n",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\tint alloc_console = -1;\n"
+            "#endif\n",
+        ),
+        (
+            "#ifdef WINDOWS32\n"
+            "\t\t\t// Windows allocate console option\n"
+            "\t\t\talloc_console = 1;\n"
+            "#endif\n",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\t\t\t// Windows allocate console option\n"
+            "\t\t\talloc_console = 1;\n"
+            "#endif\n",
+        ),
+        (
+            "#ifdef WINDOWS32\n"
+            "\t\t\t// Windows allocate console option\n"
+            "\t\t\talloc_console = 0;\n"
+            "#endif\n",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\t\t\t// Windows allocate console option\n"
+            "\t\t\talloc_console = 0;\n"
+            "#endif\n",
+        ),
+        (
+            "#ifdef WINDOWS32\n"
+            "\twindows32_init(alloc_console);\n"
+            "#endif\n",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\twindows32_init(alloc_console);\n"
+            "#endif\n",
+        ),
+        (
+            "#ifdef WINDOWS32\n"
+            "\twindows32_shutdown();\n"
+            "#endif\n",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\twindows32_shutdown();\n"
             "#endif\n",
         ),
     ])
