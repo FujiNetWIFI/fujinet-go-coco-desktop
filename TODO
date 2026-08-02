@@ -446,7 +446,87 @@ M9 (done) Packaging + release job.
     check and metainfo-grep logic were tested against this tree's real
     files by hand, not just read.
 
-M10 macOS and Windows frontends, remaining debugger windows, polish.
+M10 (part) macOS and Windows frontends, remaining debugger windows, polish.
+
+    Windows frontend done: frontends/windows/{main.c,resource.h,resource.rc,
+    app.manifest.in,app.ico,debugger/dbg_window.{c,h}}, native Win32/GDI, no
+    toolkit -- matching the family's own convention (see
+    fujinet-go-adam-desktop/frontends/windows/, the structural reference).
+    Not a line-for-line port: several of ADAM's assumptions do not hold for
+    CoCo --
+      * cocodebug is poll-only (cocodebug_stop_serial(), compared on the
+        existing 100ms WM_TIMER), not adamdebug's stop-callback-plus-
+        WM_DBG_STOPPED-marshaling -- XRoar's instruction-hook context makes
+        a cross-thread callback into a toolkit unsafe, the same reason the
+        GNOME/KDE debuggers poll too.
+      * No register or memory *editing* API exists (cocodebug_regs_get has
+        no _set, cocodebug_read has no _write) -- display-only, matching
+        GNOME.
+      * No VDP, no instruction trace (ADAM's debugger has both, CoCo has
+        neither) -- replaced with one decoded-screen pixel pane
+        (cocodebug_video_decode) and Load Symbols…/Clear Symbols buttons
+        (cocodebug_symbols_load/_clear -- new UI, ADAM's own symbol tables
+        load automatically with no frontend affordance to copy). No tab
+        control at all: with VDP and Trace gone there is nothing left to
+        justify one, so the debugger window is a single flattened CPU+
+        Video layout instead of ADAM's three-tab one.
+      * cocosession_copy_frame's frame size is dynamic (up to 800x300, the
+        video mode can change at runtime), not a compile-time constant like
+        ADAM's 256x212 -- the present thread and dest_rect()/BITMAPINFO
+        track g_fb_w/g_fb_h per frame. Its XRGB8888 pixels are already
+        GDI's BI_RGB 32bpp byte order on a little-endian host (same
+        conclusion GNOME's own code comment draws for its GDK format), so
+        neither the main display nor the debugger's video pane need the
+        RGB565->BGRA conversion loop ADAM's present thread has.
+      * Keyboard input is forwarded directly via cocosession_key(down,
+        keysym, unicode, ctrl, shift) per keystroke rather than ADAM's
+        single pre-translated byte. Win32 VK codes carry no shift state of
+        their own, so rather than reconstruct a shifted symbol with
+        ToUnicode (and have to keep key-down/key-up consistent despite
+        transient modifier state), non-special keys resolve straight to
+        their base US-layout character -- stable across down/up by
+        construction, and exactly the "unshifted symbol on the same
+        physical key" core/src/input_map.c's coco_key_from_event already
+        wants. ADAM's Ctrl+digit ColecoVision keypad-as-joystick trick has
+        no CoCo equivalent and is dropped, not translated.
+      * CoCo's live Machine/TV-input/Artifact-Colour/CPU menus (no ADAM
+        equivalent at all) are built at runtime by walking each
+        cocosession_*_name(idx) table until NULL -- the same shape as
+        GNOME's radio_menu() helper -- into four IDM_*_BASE-relative
+        command-id ranges, with CheckMenuRadioItem for the check marks
+        (Win32 has no stateful action objects) and the whole menu bar
+        rebuilt after a machine switch so Display only offers the TV inputs
+        the new machine actually has (RGB disappears on a CoCo 2).
+      * cocosession_import_rom/has_system_roms (CoCo's ROMs are not
+        embedded, unlike ADAM's) needed their own Import System ROMs...
+        menu item -- GetOpenFileNameA with OFN_ALLOWMULTISELECT, mirroring
+        GNOME's action_import_roms.
+    Fixed one latent bug found while adapting rather than carried over: a
+    line-for-line port of ADAM's fullscreen toggle never reattaches the
+    menu bar on restore (SetMenu is only ever called to remove it); CoCo's
+    version calls SetMenu(hwnd, g_menu) again when leaving fullscreen. Also
+    fixed vs. a naive port: the debugger's WM_CLOSE (which hides rather
+    than destroys, so F12 reopens instantly) calls
+    cocodebug_set_engaged(d->dbg, 0) right there rather than deferring
+    cleanup to WM_DESTROY the way ADAM defers clearing its stop callback --
+    WM_DESTROY with this hide-not-destroy shape only fires at process exit,
+    so deferring would leave the emulator running the slow instruction-
+    hooked path forever every time the window is merely closed.
+
+    Verified locally as far as this machine can: both new .c files compile
+    clean (zero warnings) against the mingw-w64 cross toolchain already in
+    this repo, and every cocosession_*/cocodebug_*/coco_debugger_* symbol
+    they reference resolves against the real headers (checked by hand,
+    function by function). A full link was not possible here -- MSYS2's
+    prebuilt libtre/libsystre packages are what CI's windows.yml installs,
+    and this dev machine has neither pre-built nor a quick path to one
+    (TRE is autotools upstream, not the CMake build the toolchain file's
+    own SDL3/mbedTLS recipes use; a from-source build was started but not
+    finished once it became clear the packages CI already has solve this).
+    The ordinary Linux build and full ctest suite are unaffected
+    (frontends/windows/CMakeLists.txt returns immediately on a non-WIN32
+    configure). Push-and-watch-CI is next, the same iterative loop M7's
+    Windows CI work used.
 
 
 Known issues / things to remember
