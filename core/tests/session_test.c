@@ -17,6 +17,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#if defined(_WIN32)
+#include <direct.h>
+#endif
+
 #include "cocosession.h"
 
 static int failures;
