@@ -525,8 +525,74 @@ M10 (part) macOS and Windows frontends, remaining debugger windows, polish.
     finished once it became clear the packages CI already has solve this).
     The ordinary Linux build and full ctest suite are unaffected
     (frontends/windows/CMakeLists.txt returns immediately on a non-WIN32
-    configure). Push-and-watch-CI is next, the same iterative loop M7's
-    Windows CI work used.
+    configure). Verified on GitHub Actions (run 30756620974): green on the
+    first push, no iteration needed -- fujinet-go-coco-windows.exe actually
+    linked and no_embedded_roms_fujinet-go-coco-windows ran against it and
+    passed, confirmed from the log rather than assumed.
+
+    macOS frontend done: frontends/macos/{main.m,AppDelegate.{h,m},
+    DisplayView.{h,m},debugger/DebuggerWindow.{h,m},Info.plist.in,
+    CMakeLists.txt} + data/icons/fujinet-go-coco.icns, native AppKit
+    (Objective-C), no toolkit -- same convention, fujinet-go-adam-desktop/
+    frontends/macos/ the structural reference. The same divergences as
+    Windows apply here (poll-only cocodebug, no register/memory editing,
+    no VDP/trace -> one video pane + Load Symbols…/Clear Symbols, dynamic
+    frame size, live Machine/TV-input/Artifact-Colour/CPU radio menus with
+    no ADAM equivalent) -- see the Windows entry above for the reasoning,
+    which was written once and applies to both ports rather than repeated
+    here. macOS-specific points:
+      * NSEvent.charactersIgnoringModifiers already gives a layout-aware
+        *unshifted* character, unlike Win32's positional VK codes with no
+        shift state -- so unlike Windows this needed no ToUnicode-
+        avoidance workaround, ADAM's existing function-key-to-X11-keysym
+        table ports essentially unchanged, and keyUp: forwards a real
+        release (cocosession_key wants both edges; ADAM's ColecoVision
+        keypad hack it also had here is dropped, same as Windows).
+      * The XRGB8888-already / no-conversion-loop point applies to
+        CGImageCreate too: kCGImageAlphaNoneSkipFirst |
+        kCGBitmapByteOrder32Little is the BGRX-in-memory flag combination,
+        replacing ADAM's alpha-last RGBA flags and manual RGB565
+        conversion, for both the main display and the debugger's video
+        pane.
+      * Live radio menus use NSMenuItem.state/.tag directly (AppKit menu
+        items track their own checked state; no CheckMenuRadioItem
+        equivalent needed) and the whole bar is rebuilt after any change,
+        same simplification already used for Windows/GNOME.
+      * Toggle Full Screen is the stock toggleFullScreen: action --
+        genuinely simpler than Windows' manual WS_OVERLAPPEDWINDOW/
+        WINDOWPLACEMENT dance, no custom fullscreen code at all.
+      * FujiNet Configuration keeps the embedded WKWebView (unlike
+        Windows' external-browser-only choice): WebKit.framework ships
+        with macOS at zero bundle-size cost, so the KDE-vs-GNOME size
+        trade-off that made Windows skip it does not apply here.
+      * No Settings/Preferences window in this pass, deliberately matching
+        Windows' own scope -- aspect_mode/smooth_scaling are read once at
+        launch and not exposed for changing. A real gap shared with
+        Windows, not macOS-specific, worth a follow-up for both.
+      * Same debugger WM_CLOSE-equivalent fix as Windows:
+        windowShouldClose: calls cocodebug_set_engaged(_dbg, 0) before
+        hiding (returns NO, keeping the window alive for F12 to reshow),
+        rather than only at process exit the way ADAM's stop-callback
+        teardown effectively would with the same hide-not-destroy shape.
+
+    Verification asymmetry vs. Windows: there is no macOS SDK or cross
+    toolchain on this Linux machine (unlike mingw-w64 for Windows), so no
+    local compile check was possible at all -- clang -fsyntax-only cannot
+    even resolve <Cocoa/Cocoa.h>, let alone validate AppKit API usage.
+    Every method name/signature was instead cross-referenced by hand
+    against ADAM's own already-shipped, working source (read in full this
+    session) rather than from memory. One real bug this care caught before
+    it shipped: an NSOpenPanel.allowedContentTypes set to an empty array
+    (meant as "no restriction" for the Load Symbols dialog) would actually
+    have allowed nothing -- fixed by leaving the property unset instead.
+    Push-and-watch-CI is the only verification this pass got; expect this
+    loop to matter more here than it did for Windows, which had the mingw
+    pre-check to lean on. CI packaging depth is intentionally the same as
+    Windows' too: .github/workflows/macos.yml is unmodified (still builds
+    SDL3 shared into a scratch prefix, fine for CI validation), and the
+    static-SDL3/otool-L-sweep/code-signing/notarization/release.yml-
+    asset-list work fujinet-go-adam-desktop's own macOS job does is
+    explicitly deferred, not silently dropped.
 
 
 Known issues / things to remember
