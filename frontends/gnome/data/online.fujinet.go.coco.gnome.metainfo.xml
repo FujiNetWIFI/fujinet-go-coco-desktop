@@ -44,6 +44,25 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-08-02">
+      <description>
+        <p>
+          Native Windows and macOS builds join Linux: both are full Win32/
+          AppKit frontends, not ports of a shared toolkit, with their own
+          debugger windows and Settings dialogs.
+        </p>
+        <p>
+          The debugger gained a decoded video pane, HD6309 disassembly
+          alongside the 6809, and symbol loading (LWASM's --symbol-dump
+          format, plus a small built-in table of Color BASIC ROM entry
+          points). The Color Computer's CPU (6809/HD6309) can now be
+          switched live, the same way the machine and TV input already
+          could. CI now covers Linux, macOS, Windows and flatpak on every
+          push, and released packages include .deb/.rpm/.tar.gz alongside
+          the flatpaks.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-07-27">
       <description>
         <p>
