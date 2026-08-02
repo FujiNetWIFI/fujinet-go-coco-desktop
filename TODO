@@ -375,8 +375,8 @@ M7 (done) CI: linux, macOS, Windows and flatpak.
     cache, but it is exactly the recipe already verified locally rather
     than a second untested path.
 
-M8  Icons, desktop entries, AppStream metainfo, screenshots.
-    Desktop entries and metainfo exist for both Linux frontends. Icon art now
+M8 (done) Icons, desktop entries, AppStream metainfo, screenshots.
+    Desktop entries and metainfo exist for both Linux frontends. Icon art
     too: tools/icons/make-icons.py composites fujinet-go-coco's (the Android
     app's) xxxhdpi adaptive icon layers -- background + foreground, already
     safe-zone padded -- into the same circular badge its flattened
@@ -385,7 +385,17 @@ M8  Icons, desktop entries, AppStream metainfo, screenshots.
     (takes the Android checkout's res/ dir as an argument) rather than a
     build step, since the source Android checkout is not expected to be
     present for everyone building this repo; the rendered PNGs are committed.
-    Screenshots for the metainfo still to do.
+
+    data/screenshots/1_fujinet_config.png and 2_debugger.png (both metainfo
+    files reference the same two, since the app looks the same either
+    frontend): real captures, not mockups -- the GNOME frontend built with
+    system ROMs already present on this machine, launched on a live
+    Hyprland session, grabbed with grim against the actual window geometry
+    (hyprctl clients), then cropped to trim the emulator canvas's own
+    letterboxing rather than resized, so what ships is pixel-for-pixel what
+    the app renders. #1 is HDB-DOS's auto-boot into FujiNet CONFIG; #2 is
+    the debugger (COCO_OPEN_DEBUGGER=1) mid-boot, disassembly/registers/
+    memory panes and the Load Symbols…/Clear Symbols buttons all visible.
 
 M9  Packaging + release job.
 
