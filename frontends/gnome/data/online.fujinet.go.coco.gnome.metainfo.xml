@@ -44,6 +44,18 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.3" date="2026-08-05">
+      <description>
+        <p>
+          The debugger now steps through C source, for programs built with
+          CMOC. Load a listing (from `cmoc -i`) and get a source pane with
+          the current line marked, breakpoints set by clicking a line,
+          Step Line/Step Over Line alongside the existing instruction-level
+          stepping, and a Locals pane showing parameters and locals by name
+          and value.
+        </p>
+      </description>
+    </release>
     <release version="0.2.2" date="2026-08-02">
       <description>
         <p>
