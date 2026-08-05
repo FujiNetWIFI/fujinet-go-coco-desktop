@@ -44,6 +44,19 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.4" date="2026-08-05">
+      <description>
+        <p>
+          The debugger's C source stepping now handles programs built from
+          several .c files: select every module's .lst at once (or load
+          them one at a time), and each adds its own functions, lines and
+          locals rather than replacing what was already loaded. CMOC names
+          the linker map after the final executable, not any one source
+          file, so a multi-module build's shared .map is now found even
+          when it doesn't share a listing's name.
+        </p>
+      </description>
+    </release>
     <release version="0.2.3" date="2026-08-05">
       <description>
         <p>
