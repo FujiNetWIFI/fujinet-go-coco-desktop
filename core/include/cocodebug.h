@@ -129,16 +129,24 @@ int cocodebug_breakpoint_list(cocodebug *d, uint16_t *out, int max);
  * cocodebug_locals_get, which reads live memory the same as
  * cocodebug_read. */
 
-/* Parses lst_path and its sibling .map (same directory and basename,
- * extension ".map") -- both only kept by `cmoc -i`. Function/data symbols
- * the map resolves are also loaded into the symbol table, so the
- * disassembly view picks up C names for free. Replaces anything already
- * loaded. Best called while paused: a C-line step in flight targets the
- * table being replaced, and is cancelled by this call either way. Returns
- * the number of source lines with code on them, or -1 if the listing or its
- * .map could not be read. */
+/* Parses lst_path and its linker map -- both only kept by `cmoc -i`.
+ * Function/data symbols the map resolves are also loaded into the symbol
+ * table, so the disassembly view picks up C names for free.
+ *
+ * ADDS to whatever source info is already loaded rather than replacing it
+ * (see cocosrcinfo_load in csrcinfo.h for exactly how the .map is found,
+ * including the multi-module case): call this once per .lst to debug a
+ * program built from several C files, and cocodebug_source_clear() first
+ * for a clean slate instead of accumulating.
+ *
+ * Best called while paused: a C-line step in flight targets the table
+ * being changed, and is cancelled by this call either way. Returns the
+ * number of source lines with code on them known after this call
+ * (cumulative, not just this one), or -1 if the listing or a .map for it
+ * could not be found. */
 int cocodebug_source_load(cocodebug *d, const char *lst_path);
-/* Drops everything cocodebug_source_load loaded. */
+/* Drops everything cocodebug_source_load loaded (every module, not just
+ * the most recent). */
 void cocodebug_source_clear(cocodebug *d);
 int cocodebug_source_available(const cocodebug *d);
 

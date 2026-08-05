@@ -546,28 +546,72 @@ static void rebuild_src_combo(debugger *d)
     }
 }
 
+/* One or more .lst files, one per module of a multi-file CMOC program --
+ * cocodebug_source_load() adds to what is already loaded rather than
+ * replacing it (see its own doc comment for why: cmoc names the .map after
+ * the linked executable, not any one .lst, so every module's listing wants
+ * the very .map its neighbours do), so loading them all here in one dialog
+ * is exactly the multi-file case working as intended. */
 static void load_source(debugger *d)
 {
     OPENFILENAMEA ofn;
-    char path[MAX_PATH] = "";
+    static char buf[16384]; /* zeroed: static duration, not stack garbage --
+                              * the single/multi disambiguation below relies
+                              * on the byte past the first NUL already being
+                              * '\0' unless GetOpenFileNameA itself put a
+                              * second filename there. */
+    char dir[MAX_PATH];
+    char *p;
+    int loaded = 0, failed = 0;
 
+    memset(buf, 0, sizeof(buf));
     memset(&ofn, 0, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = d->hwnd;
     ofn.lpstrFilter = "CMOC listings (*.lst)\0*.lst\0All files\0*.*\0";
-    ofn.lpstrFile = path;
-    ofn.nMaxFile = sizeof(path);
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    ofn.lpstrFile = buf;
+    ofn.nMaxFile = sizeof(buf);
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST |
+               OFN_ALLOWMULTISELECT | OFN_EXPLORER;
     if (!GetOpenFileNameA(&ofn))
         return;
 
-    if (cocodebug_source_load(d->dbg, path) < 0) {
+    p = buf + strlen(buf) + 1;
+    if (*p == '\0') {
+        /* Exactly one file: buf is the whole path, with none of the
+         * directory/filename split below -- that split only happens when
+         * there is more than one filename to share a directory with. */
+        if (cocodebug_source_load(d->dbg, buf) < 0)
+            failed++;
+        else
+            loaded++;
+    } else {
+        strncpy(dir, buf, sizeof(dir) - 1);
+        dir[sizeof(dir) - 1] = '\0';
+        while (*p) {
+            char full[MAX_PATH * 2]; /* dir + '\\' + filename, each up to
+                                      * MAX_PATH on its own */
+            size_t n = strlen(p);
+            snprintf(full, sizeof(full), "%s\\%s", dir, p);
+            if (cocodebug_source_load(d->dbg, full) < 0)
+                failed++;
+            else
+                loaded++;
+            p += n + 1;
+        }
+    }
+
+    if (failed && !loaded) {
         set_text(d->status,
                 "Could not open listing or its .map (both need `cmoc -i`)");
         return;
     }
-    d->src_cached_path[0] = '\0'; /* the file list may have changed */
-    rebuild_src_combo(d);
+    if (failed)
+        set_text(d->status, "Some listings could not be opened");
+    if (loaded) {
+        d->src_cached_path[0] = '\0'; /* the file list may have changed */
+        rebuild_src_combo(d);
+    }
 }
 
 static void clear_source(debugger *d)

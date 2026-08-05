@@ -106,10 +106,12 @@ public:
                       m_seenSerial = 0;
                   });
         addButton(bar, QStringLiteral("Load C Source…"),
-                  QStringLiteral("Load a CMOC listing (.lst, from `cmoc -i`) "
-                                 "for source-level stepping and locals. Its "
-                                 "sibling .map (also only kept by -i) is "
-                                 "found automatically."),
+                  QStringLiteral("Load one or more CMOC listings (.lst, "
+                                 "from `cmoc -i`) for source-level stepping "
+                                 "and locals -- select every module of a "
+                                 "multi-file program at once. The shared "
+                                 ".map (also only kept by -i) is found "
+                                 "automatically."),
                   [this] { loadSource(); });
         addButton(bar, QStringLiteral("Clear C Source"),
                   QStringLiteral("Drop loaded C source info"), [this] {
@@ -278,19 +280,36 @@ private:
         m_seenSerial = 0; /* redraw the disassembly with the new labels */
     }
 
+    /* One or more .lst files, one per module of a multi-file CMOC program --
+     * cocodebug_source_load() adds to what is already loaded rather than
+     * replacing it (see its own doc comment for why: cmoc names the .map
+     * after the linked executable, not any one .lst, so every module's
+     * listing wants the very .map its neighbours do), so loading them all
+     * here in one dialog is exactly the multi-file case working as
+     * intended. */
     void loadSource()
     {
-        const QString path = QFileDialog::getOpenFileName(
+        const QStringList paths = QFileDialog::getOpenFileNames(
             this, QStringLiteral("Load C Source"), QString(),
             QStringLiteral("CMOC listings (*.lst);;All files (*)"));
-        if (path.isEmpty())
+        if (paths.isEmpty())
             return;
-        if (cocodebug_source_load(m_dbg, path.toUtf8().constData()) < 0) {
+        int loaded = 0, failed = 0;
+        for (const QString &path : paths) {
+            if (cocodebug_source_load(m_dbg, path.toUtf8().constData()) < 0)
+                failed++;
+            else
+                loaded++;
+        }
+        if (failed && !loaded) {
             m_status->setText(
                 QStringLiteral("Could not open listing or its .map (both "
                                "need `cmoc -i`)"));
             return;
         }
+        if (failed)
+            m_status->setText(
+                QStringLiteral("Some listings could not be opened"));
         m_srcCachedPath.clear(); /* the file list may have changed */
         rebuildSourceCombo();
         m_seenSerial = 0;

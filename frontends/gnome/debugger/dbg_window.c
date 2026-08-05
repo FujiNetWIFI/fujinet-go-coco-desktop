@@ -541,31 +541,49 @@ static void rebuild_src_combo(DebuggerUI *ui)
         gtk_list_box_remove_all(ui->src_list);
 }
 
+/* One or more .lst files, one per module of a multi-file CMOC program --
+ * cocodebug_source_load() adds to what is already loaded rather than
+ * replacing it (see its own doc comment for why: cmoc names the .map after
+ * the linked executable, not any one .lst, so every module's listing wants
+ * the very .map its neighbours do), so loading them all here in one dialog
+ * is exactly the multi-file case working as intended. */
 static void load_source_done(GObject *source, GAsyncResult *result,
                              gpointer user_data)
 {
     DebuggerUI *ui = user_data;
-    g_autoptr(GFile) file =
-        gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
-    g_autofree char *path = NULL;
-    int n;
+    g_autoptr(GListModel) files = gtk_file_dialog_open_multiple_finish(
+        GTK_FILE_DIALOG(source), result, NULL);
+    guint i, n_files;
+    int loaded = 0, failed = 0;
 
-    if (!file)
+    if (!files)
         return;
-    path = g_file_get_path(file);
-    if (!path)
-        return;
-    n = cocodebug_source_load(ui->dbg, path);
-    if (n < 0) {
+    n_files = g_list_model_get_n_items(files);
+    for (i = 0; i < n_files; i++) {
+        g_autoptr(GFile) file = g_list_model_get_item(files, i);
+        g_autofree char *path = g_file_get_path(file);
+        if (!path)
+            continue;
+        if (cocodebug_source_load(ui->dbg, path) < 0)
+            failed++;
+        else
+            loaded++;
+    }
+
+    if (failed && !loaded)
         gtk_label_set_text(
             ui->status,
             "Could not open listing or its .map (both need `cmoc -i`)");
-        return;
+    else if (failed)
+        gtk_label_set_text(ui->status,
+                           "Some listings could not be opened");
+
+    if (loaded) {
+        g_clear_pointer(&ui->src_cached_path, g_free);
+        g_clear_pointer(&ui->src_cached_lines, g_strfreev);
+        rebuild_src_combo(ui);
+        ui->seen_serial = 0;
     }
-    g_clear_pointer(&ui->src_cached_path, g_free);
-    g_clear_pointer(&ui->src_cached_lines, g_strfreev);
-    rebuild_src_combo(ui);
-    ui->seen_serial = 0;
 }
 
 static void on_load_source(GtkButton *button, gpointer user_data)
@@ -582,7 +600,8 @@ static void on_load_source(GtkButton *button, gpointer user_data)
     g_list_store_append(filters, filter);
     gtk_file_dialog_set_title(dialog, "Load C Source");
     gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
-    gtk_file_dialog_open(dialog, ui->window, NULL, load_source_done, ui);
+    gtk_file_dialog_open_multiple(dialog, ui->window, NULL, load_source_done,
+                                  ui);
     g_object_unref(filters);
     g_object_unref(dialog);
 }
@@ -771,10 +790,12 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
                                G_CALLBACK(on_clear_symbols), ui));
     gtk_box_append(GTK_BOX(bar),
                    tool_button("Load C _Source…",
-                               "Load a CMOC listing (.lst, from `cmoc -i`) "
-                               "for source-level stepping and locals. Its "
-                               "sibling .map (also only kept by -i) is "
-                               "found automatically.",
+                               "Load one or more CMOC listings (.lst, from "
+                               "`cmoc -i`) for source-level stepping and "
+                               "locals -- select every module of a "
+                               "multi-file program at once. The shared "
+                               ".map (also only kept by -i) is found "
+                               "automatically.",
                                G_CALLBACK(on_load_source), ui));
     gtk_box_append(GTK_BOX(bar),
                    tool_button("Clear C So_urce",

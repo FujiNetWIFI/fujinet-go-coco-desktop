@@ -157,13 +157,81 @@ int main(void)
        cocosrcinfo_load(t, "does-not-exist.lst", NULL) == -1);
 
     /* --- clear drops everything --------------------------------------------- */
-    cocosrcinfo_load(t, lst_path, NULL);
     cocosrcinfo_clear(t);
     ok("the table is empty after clear", cocosrcinfo_empty(t));
     ok("a lookup after clear misses", !cocosrcinfo_is_stmt(t, 0x2E83));
 
     cocosrcinfo_destroy(t);
     cocosymtab_destroy(sym);
+
+    /* --- multiple modules: loading accumulates rather than replaces -------
+     * core/tests/data/multi/{main,module}.lst are a real `cmoc -i --decb
+     * main.c module.c -o game.bin` build: two listings, but only ONE
+     * game.map (cmoc names it after the linked executable, not either
+     * source file), which is exactly the case cocosrcinfo_load's
+     * directory-fallback exists for -- neither listing's own basename
+     * guess ("main.map"/"module.map") exists next to it. -------------------- */
+    {
+        cocosrcinfo *mt = cocosrcinfo_create();
+        cocosymtab *msym = cocosymtab_create();
+        char main_lst[512], module_lst[512];
+        int n1, n2;
+        uint16_t maddr;
+        const cocosrc_func *fm, *fs;
+
+        snprintf(main_lst, sizeof(main_lst), "%s/multi/main.lst",
+                CSRCINFO_TEST_DATA_DIR);
+        snprintf(module_lst, sizeof(module_lst), "%s/multi/module.lst",
+                CSRCINFO_TEST_DATA_DIR);
+
+        n1 = cocosrcinfo_load(mt, main_lst, msym);
+        ok("main.lst loads even though main.map doesn't exist (falls back "
+           "to the directory's one game.map)", n1 > 0);
+
+        n2 = cocosrcinfo_load(mt, module_lst, msym);
+        ok("module.lst loading ADDS to main.lst's data rather than "
+           "replacing it", n2 > n1);
+
+        ok("_main resolves via the symbol table",
+           cocosymtab_lookup_name(msym, "_main", &maddr) && maddr == 0x2E85);
+        ok("_square resolves too (pushed in by the second, additive load)",
+           cocosymtab_lookup_name(msym, "_square", &maddr) &&
+           maddr == 0x2EAC);
+
+        fm = cocosrcinfo_func_at(mt, 0x2E85);
+        ok("main() is still found after module.lst was also loaded",
+           fm && strcmp(fm->name, "main") == 0);
+
+        fs = cocosrcinfo_func_at(mt, 0x2EAC);
+        ok("square() is found, from the second load", fs != NULL);
+        if (fs) {
+            int nv;
+            const cocosrc_var *vars, *v;
+
+            ok("square's name is right", strcmp(fs->name, "square") == 0);
+            ok("square's lo is its entry", fs->lo == 0x2EAC);
+            ok("square's hi is one past its last instruction",
+               fs->hi == 0x2EBF);
+
+            vars = cocosrcinfo_func_vars(mt, fs, &nv);
+            ok("square has 2 variables (n, r)", nv == 2);
+            v = find_var(vars, nv, "n");
+            ok("n is a parameter at 4,U", v && v->frame_off == 4 &&
+                                          v->is_param);
+            v = find_var(vars, nv, "r");
+            ok("r is a local at -2,U", v && v->frame_off == -2 &&
+                                       !v->is_param);
+        }
+
+        ok("module.c:6 (a line entry from the second load) resolves",
+           cocosrcinfo_line_at(mt, 0x2EB2, NULL, NULL));
+        ok("main.c:9 (a line entry from the first load) still resolves",
+           cocosrcinfo_line_at(mt, 0x2E90, NULL, NULL));
+        ok("two distinct source files are known", cocosrcinfo_file_count(mt) == 2);
+
+        cocosrcinfo_destroy(mt);
+        cocosymtab_destroy(msym);
+    }
 
     if (failures) {
         printf("\n%d failure(s)\n", failures);

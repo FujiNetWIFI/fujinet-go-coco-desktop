@@ -523,21 +523,38 @@ static NSTextView *monoView(NSScrollView **scrollOut)
         [self refreshDisasm];
 }
 
+/* One or more .lst files, one per module of a multi-file CMOC program --
+ * cocodebug_source_load() adds to what is already loaded rather than
+ * replacing it (see its own doc comment for why: cmoc names the .map after
+ * the linked executable, not any one .lst, so every module's listing wants
+ * the very .map its neighbours do), so loading them all here in one panel
+ * is exactly the multi-file case working as intended. */
 - (void)loadSource:(id)sender
 {
     (void)sender;
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.title = @"Load C Source";
+    panel.allowsMultipleSelection = YES;
     /* No allowedContentTypes: ".lst" is not a registered UTType either, and
      * leaving this unset is what shows every file, same reasoning as
      * loadSymbols: above. */
-    if ([panel runModal] != NSModalResponseOK || !panel.URL)
+    if ([panel runModal] != NSModalResponseOK || panel.URLs.count == 0)
         return;
-    if (cocodebug_source_load(_dbg, panel.URL.path.UTF8String) < 0) {
+
+    int loaded = 0, failed = 0;
+    for (NSURL *url in panel.URLs) {
+        if (cocodebug_source_load(_dbg, url.path.UTF8String) < 0)
+            failed++;
+        else
+            loaded++;
+    }
+    if (failed && !loaded) {
         _status.stringValue =
             @"Could not open listing or its .map (both need `cmoc -i`)";
         return;
     }
+    if (failed)
+        _status.stringValue = @"Some listings could not be opened";
     _srcCachedPath = nil; /* the file list may have changed */
     [self rebuildSrcCombo];
 }

@@ -66,9 +66,16 @@ line marked, step/step-over by C statement, breakpoints set by clicking a
 line, and a Locals pane showing parameters and locals by name and value.
 Load it with the "Load C Source…" button, pointing at the `.lst` listing —
 its sibling `.map` and every source file it names are found automatically.
-Requires compiling with `cmoc -i` (`--intermediate`), which is the flag that
-keeps the listing and linker map around; without it CMOC deletes both once
-the binary is linked. Available in every frontend.
+For a program built from several `.c` files, select all of their `.lst`
+files at once (every frontend's dialog allows multiple); loading is
+additive, so each one adds its module's functions, lines and locals rather
+than replacing what was already loaded. CMOC names the `.map` after the
+linked executable, not any one source file, so when a listing's own name
+doesn't match a `.map` next to it, the one `.map` actually present in that
+directory is used instead — the common case for a multi-file build. Requires
+compiling with `cmoc -i` (`--intermediate`), which is the flag that keeps
+the listing and linker map around; without it CMOC deletes both once the
+binary is linked. Available in every frontend.
 
 ## Building
 

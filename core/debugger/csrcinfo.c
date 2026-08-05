@@ -28,6 +28,7 @@
 #include "csrcinfo.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -486,6 +487,46 @@ static int match_symbol_line(const char *line, char *name, size_t namesz,
     return 1;
 }
 
+static int file_exists(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    fclose(f);
+    return 1;
+}
+
+/* Falls back to this when the name derived from the .lst's own basename
+ * doesn't exist. That guess only ever matches for a single-file build
+ * (cmoc names the .map after the linked *executable*, not any one source
+ * file -- a multi-module program's main.lst and module.lst both want the
+ * one game.map, not a nonexistent main.map/module.map of their own). All
+ * of a build's .lst files share a directory with that one .map, so if
+ * exactly one *.map is sitting there, it has to be it. Returns 1 and fills
+ * out on an unambiguous match, 0 if none or more than one was found (in
+ * which case the caller's own basename guess, which will fail to open, is
+ * left standing -- an ambiguous directory is a caller problem, not
+ * something to guess through). */
+static int find_map_fallback(const char *dir, char *out, size_t outsz)
+{
+    DIR *d = opendir(dir);
+    struct dirent *ent;
+    int nfound = 0;
+
+    if (!d)
+        return 0;
+    while ((ent = readdir(d)) != NULL) {
+        size_t n = strlen(ent->d_name);
+        if (n > 4 && strcmp(ent->d_name + n - 4, ".map") == 0) {
+            nfound++;
+            if (nfound == 1)
+                snprintf(out, outsz, "%s/%s", dir, ent->d_name);
+        }
+    }
+    closedir(d);
+    return nfound == 1;
+}
+
 static int load_map(const char *map_path, const char *target_obj,
                     section_base_entry *bases, int *nbases,
                     cocosymtab *symtab)
@@ -653,14 +694,19 @@ int cocosrcinfo_load(cocosrcinfo *t, const char *lst_path, cocosymtab *symtab)
     if (!t || !lst_path)
         return -1;
 
-    cocosrcinfo_clear(t);
-
     split_path(lst_path, lst_dir, sizeof(lst_dir), lst_base, sizeof(lst_base));
     replace_ext(lst_base, ".o", obj_name, sizeof(obj_name));
     {
         char map_base[136];
         replace_ext(lst_base, ".map", map_base, sizeof(map_base));
         snprintf(map_path, sizeof(map_path), "%s/%s", lst_dir, map_base);
+    }
+    if (!file_exists(map_path)) {
+        /* Not a single-file build: fall back to the directory's one .map,
+         * shared by every module linked into the same program. */
+        char fallback[600];
+        if (find_map_fallback(lst_dir, fallback, sizeof(fallback)))
+            snprintf(map_path, sizeof(map_path), "%s", fallback);
     }
 
     if (load_map(map_path, obj_name, bases, &nbases, symtab) < 0)

@@ -66,13 +66,28 @@ typedef struct {
 cocosrcinfo *cocosrcinfo_create(void);
 void cocosrcinfo_destroy(cocosrcinfo *t);
 
-/* Parses a CMOC listing at lst_path and its sibling .map (same basename,
- * directory, extension ".map"). Function and data symbols found in the map
- * for this listing's own object file are also pushed into symtab via
- * cocosymtab_add(), if symtab is non-NULL, so the disassembly view picks up
- * C-level names for free. Replaces anything already loaded (clears first).
- * Returns the number of C-statement boundaries found, or -1 if the listing
- * or its .map could not be read. */
+/* Parses a CMOC listing at lst_path and its linker map. Adds to whatever is
+ * already in t -- like cocosymtab_load(), this does NOT clear first -- so a
+ * multi-module program's functions/lines/locals all become visible by
+ * calling this once per .lst; call cocosrcinfo_clear() first for a clean
+ * slate instead of accumulating.
+ *
+ * The .map is first looked for beside lst_path under lst_path's own
+ * basename (right for a single-file build, where cmoc names the .map after
+ * the same name as the sole .c/.lst). When that guess doesn't exist, the
+ * directory is searched for a single *.map file instead: cmoc actually
+ * names the .map after the linked *executable*, not any one source file,
+ * so a multi-module build's several .lst files all want the one .map their
+ * directory holds in common. Ambiguous (more than one *.map candidate) is
+ * left as a load failure rather than guessed through.
+ *
+ * Function and data symbols found in the map for this listing's own object
+ * file are also pushed into symtab via cocosymtab_add(), if symtab is
+ * non-NULL, so the disassembly view picks up C-level names for free.
+ *
+ * Returns the number of C-statement boundaries known after this call
+ * (cumulative across every load so far, not just this one), or -1 if the
+ * listing or a .map for it could not be found. */
 int cocosrcinfo_load(cocosrcinfo *t, const char *lst_path, cocosymtab *symtab);
 void cocosrcinfo_clear(cocosrcinfo *t);
 int cocosrcinfo_empty(const cocosrcinfo *t);
