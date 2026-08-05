@@ -18,6 +18,7 @@
 #include "debugger/dbg_window.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "cocodebug.h"
 #include "cocovideo.h"
@@ -39,10 +40,26 @@ typedef struct {
     GtkLabel *status;
     GtkListBox *disasm;
     GtkLabel *regs;
+    GtkLabel *locals;
     GtkPicture *video;
     GtkLabel *mem;
     GtkEntry *mem_addr;
     GtkButton *run_pause;
+    GtkButton *step_line;
+    GtkButton *step_over_line;
+
+    /* The C source pane: a file picker over cocodebug_source_file_path()'s
+     * table, and the listing of whichever one is selected. */
+    GtkDropDown *src_file_combo;
+    GtkListBox *src_list;
+    char *src_cached_path;    /* which file src_cached_lines holds */
+    char **src_cached_lines;  /* g_strsplit() result, NULL-terminated */
+    int src_displayed_file_id;
+    /* Where PC actually is, independent of which file the combo is showing
+     * (a user may be browsing a different file to set a breakpoint ahead of
+     * time): the '>' marker only appears when these match the displayed
+     * file. */
+    int pc_file_id, pc_line;
 
     /* Heap-allocated: COCOVIDEO_MAX_WIDTH*HEIGHT is too big for a GObject
      * instance, same reasoning as CocoDisplay's own frame buffer. */
@@ -95,6 +112,40 @@ static void refresh_regs(DebuggerUI *ui)
         (r.cc & 0x08) ? 'N' : '-', (r.cc & 0x04) ? 'Z' : '-',
         (r.cc & 0x02) ? 'V' : '-', (r.cc & 0x01) ? 'C' : '-');
     gtk_label_set_text(ui->regs, text);
+}
+
+static void refresh_locals(DebuggerUI *ui)
+{
+    cocodebug_local locals[32];
+    int n, i;
+    GString *text;
+
+    if (!cocodebug_source_available(ui->dbg)) {
+        gtk_label_set_text(ui->locals, "");
+        return;
+    }
+    n = cocodebug_locals_get(ui->dbg, locals, 32);
+    if (n == 0) {
+        /* Not necessarily an error: PC may just be before the function's
+         * first statement (mid-prologue), where there is nothing correct to
+         * show yet. */
+        gtk_label_set_text(ui->locals, "(no locals in scope)");
+        return;
+    }
+    text = g_string_new(NULL);
+    for (i = 0; i < n; i++) {
+        const cocodebug_local *v = &locals[i];
+        g_string_append_printf(text, "%-12s %-10s %s= ", v->name, v->type,
+                               v->is_param ? "(param) " : "");
+        if (v->has_value)
+            g_string_append_printf(text, "%u ($%X)\n", v->value, v->value);
+        else
+            g_string_append(text, "?\n");
+    }
+    if (text->len > 0 && text->str[text->len - 1] == '\n')
+        g_string_truncate(text, text->len - 1);
+    gtk_label_set_text(ui->locals, text->str);
+    g_string_free(text, TRUE);
 }
 
 static void on_row_activated(GtkListBox *box, GtkListBoxRow *row,
@@ -159,6 +210,104 @@ static void refresh_disasm(DebuggerUI *ui)
     }
 }
 
+static void on_src_row_activated(GtkListBox *box, GtkListBoxRow *row,
+                                 gpointer user_data)
+{
+    DebuggerUI *ui = user_data;
+    gpointer lineno;
+    (void)box;
+
+    lineno = g_object_get_data(G_OBJECT(row), "coco-line");
+    cocodebug_source_breakpoint_toggle(ui->dbg, ui->src_displayed_file_id,
+                                       GPOINTER_TO_INT(lineno));
+    ui->seen_serial = 0;
+}
+
+/* Loads (and caches) file_id's text, then redraws the list with '>' on the
+ * line PC is at (if PC's file is the one showing) and '*' on any line
+ * carrying a breakpoint. Re-reading the file is cheap enough here since this
+ * only runs on an actual stop or a manual file switch, never on every tick
+ * -- see tick_cb's early-out. */
+static void populate_src_list(DebuggerUI *ui, int file_id)
+{
+    const char *path = cocodebug_source_file_path(ui->dbg, file_id);
+    int i;
+
+    ui->src_displayed_file_id = file_id;
+
+    if (g_strcmp0(path, ui->src_cached_path) != 0) {
+        g_autofree char *contents = NULL;
+        gsize len = 0;
+
+        g_clear_pointer(&ui->src_cached_lines, g_strfreev);
+        g_free(ui->src_cached_path);
+        ui->src_cached_path = g_strdup(path);
+
+        if (path && g_file_get_contents(path, &contents, &len, NULL))
+            ui->src_cached_lines = g_strsplit(contents, "\n", -1);
+        else
+            ui->src_cached_lines = g_new0(char *, 1); /* empty, NUL-terminated */
+    }
+
+    gtk_list_box_remove_all(ui->src_list);
+    for (i = 0; ui->src_cached_lines[i]; i++) {
+        int lineno = i + 1;
+        int is_pc = (file_id == ui->pc_file_id && lineno == ui->pc_line);
+        int has_bp = cocodebug_source_breakpoint_is_set(ui->dbg, file_id,
+                                                        lineno);
+        GtkWidget *row = gtk_list_box_row_new();
+        GtkWidget *label = gtk_label_new(NULL);
+        g_autofree char *text =
+            g_strdup_printf("%c%c %5d  %s", is_pc ? '>' : ' ',
+                            has_bp ? '*' : ' ', lineno,
+                            ui->src_cached_lines[i]);
+
+        gtk_label_set_text(GTK_LABEL(label), text);
+        gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+        gtk_widget_add_css_class(label, "monospace");
+        gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), label);
+        g_object_set_data(G_OBJECT(row), "coco-line", GINT_TO_POINTER(lineno));
+        gtk_list_box_append(ui->src_list, row);
+        /* Grabbing focus scrolls it into view in any ancestor
+         * GtkScrolledWindow -- the disassembly pane needs no equivalent
+         * because it always starts its listing AT pc, but a source file's
+         * current line can be anywhere in it. */
+        if (is_pc)
+            gtk_widget_grab_focus(row);
+    }
+}
+
+static void refresh_source(DebuggerUI *ui)
+{
+    cocodebug_regs r;
+    int fid, line;
+
+    if (!cocodebug_source_available(ui->dbg)) {
+        gtk_list_box_remove_all(ui->src_list);
+        return;
+    }
+    if (!cocodebug_regs_get(ui->dbg, &r))
+        return;
+
+    if (cocodebug_source_line_at(ui->dbg, r.pc, &fid, &line)) {
+        ui->pc_file_id = fid;
+        ui->pc_line = line;
+        if ((guint)fid != gtk_drop_down_get_selected(ui->src_file_combo))
+            /* Fires notify::selected, which repopulates the list. */
+            gtk_drop_down_set_selected(ui->src_file_combo, (guint)fid);
+        else
+            populate_src_list(ui, ui->src_displayed_file_id);
+    } else {
+        /* PC is not itself a mapped statement (mid-prologue, or code with no
+         * line info): keep showing whatever file was last selected and just
+         * drop the '>' marker rather than guess. */
+        ui->pc_file_id = -1;
+        ui->pc_line = -1;
+        if (gtk_drop_down_get_model(ui->src_file_combo))
+            populate_src_list(ui, ui->src_displayed_file_id);
+    }
+}
+
 static void refresh_mem(DebuggerUI *ui)
 {
     uint8_t buf[MEM_BYTES_PER_ROW * MEM_ROWS];
@@ -219,20 +368,27 @@ static void refresh_video(DebuggerUI *ui)
 static void refresh(DebuggerUI *ui)
 {
     const int paused = cocodebug_is_paused(ui->dbg);
+    const int src_avail = cocodebug_source_available(ui->dbg);
 
     gtk_button_set_label(ui->run_pause, paused ? "_Run" : "_Pause");
     gtk_label_set_text(ui->status, paused ? "Paused" : "Running");
+    gtk_widget_set_sensitive(GTK_WIDGET(ui->step_line), src_avail);
+    gtk_widget_set_sensitive(GTK_WIDGET(ui->step_over_line), src_avail);
 
     if (paused) {
         refresh_regs(ui);
         refresh_disasm(ui);
+        refresh_source(ui);
+        refresh_locals(ui);
         refresh_mem(ui);
         refresh_video(ui);
     } else {
         /* Everything on show is only valid while parked, so clear it rather
          * than leave a stale snapshot that looks live. */
         gtk_label_set_text(ui->regs, "");
+        gtk_label_set_text(ui->locals, "");
         gtk_list_box_remove_all(ui->disasm);
+        gtk_list_box_remove_all(ui->src_list);
         gtk_label_set_text(ui->mem, "");
         gtk_picture_set_paintable(ui->video, NULL);
     }
@@ -279,6 +435,10 @@ static void on_step_over(GtkButton *b, gpointer u)
 { (void)b; cocodebug_step_over(((DebuggerUI *)u)->dbg); }
 static void on_step_out(GtkButton *b, gpointer u)
 { (void)b; cocodebug_step_out(((DebuggerUI *)u)->dbg); }
+static void on_step_line(GtkButton *b, gpointer u)
+{ (void)b; cocodebug_step_line(((DebuggerUI *)u)->dbg); }
+static void on_step_over_line(GtkButton *b, gpointer u)
+{ (void)b; cocodebug_step_over_line(((DebuggerUI *)u)->dbg); }
 static void on_clear_bp(GtkButton *b, gpointer u)
 {
     DebuggerUI *ui = u;
@@ -338,6 +498,110 @@ static void on_clear_symbols(GtkButton *b, gpointer u)
     ui->seen_serial = 0;
 }
 
+static void on_src_file_changed(GObject *obj, GParamSpec *pspec,
+                                gpointer user_data)
+{
+    DebuggerUI *ui = user_data;
+    guint idx;
+    (void)pspec;
+
+    if (!ui->dbg)
+        return;
+    idx = gtk_drop_down_get_selected(GTK_DROP_DOWN(obj));
+    if (idx == GTK_INVALID_LIST_POSITION)
+        return;
+    populate_src_list(ui, (int)idx);
+}
+
+/* Rebuilds the file picker from cocodebug_source_file_count()/_file_path().
+ * Selection index and file_id are the same number: files are appended here
+ * in exactly the id order the engine hands them out (0..count-1), so no
+ * separate index<->id table is needed the way Qt's itemData would give one
+ * for free. */
+static void rebuild_src_combo(DebuggerUI *ui)
+{
+    GtkStringList *model = gtk_string_list_new(NULL);
+    int n = cocodebug_source_file_count(ui->dbg);
+    int i;
+
+    for (i = 0; i < n; i++) {
+        const char *path = cocodebug_source_file_path(ui->dbg, i);
+        const char *base = path ? strrchr(path, '/') : NULL;
+        gtk_string_list_append(model, base ? base + 1 : (path ? path : ""));
+    }
+    gtk_drop_down_set_model(ui->src_file_combo, G_LIST_MODEL(model));
+    g_object_unref(model);
+    gtk_widget_set_sensitive(GTK_WIDGET(ui->src_file_combo), n > 0);
+    if (n > 0)
+        /* Explicit rather than relying on notify::selected: GtkDropDown may
+         * already default to index 0 on a fresh model, in which case
+         * setting it again would not fire the signal. */
+        populate_src_list(ui, 0);
+    else
+        gtk_list_box_remove_all(ui->src_list);
+}
+
+static void load_source_done(GObject *source, GAsyncResult *result,
+                             gpointer user_data)
+{
+    DebuggerUI *ui = user_data;
+    g_autoptr(GFile) file =
+        gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
+    g_autofree char *path = NULL;
+    int n;
+
+    if (!file)
+        return;
+    path = g_file_get_path(file);
+    if (!path)
+        return;
+    n = cocodebug_source_load(ui->dbg, path);
+    if (n < 0) {
+        gtk_label_set_text(
+            ui->status,
+            "Could not open listing or its .map (both need `cmoc -i`)");
+        return;
+    }
+    g_clear_pointer(&ui->src_cached_path, g_free);
+    g_clear_pointer(&ui->src_cached_lines, g_strfreev);
+    rebuild_src_combo(ui);
+    ui->seen_serial = 0;
+}
+
+static void on_load_source(GtkButton *button, gpointer user_data)
+{
+    DebuggerUI *ui = user_data;
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    GtkFileFilter *filter = gtk_file_filter_new();
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    (void)button;
+
+    gtk_file_filter_set_name(filter, "CMOC listings");
+    gtk_file_filter_add_suffix(filter, "lst");
+    gtk_file_filter_add_pattern(filter, "*");
+    g_list_store_append(filters, filter);
+    gtk_file_dialog_set_title(dialog, "Load C Source");
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+    gtk_file_dialog_open(dialog, ui->window, NULL, load_source_done, ui);
+    g_object_unref(filters);
+    g_object_unref(dialog);
+}
+
+static void on_clear_source(GtkButton *b, gpointer u)
+{
+    DebuggerUI *ui = u;
+    (void)b;
+    cocodebug_source_clear(ui->dbg);
+    g_clear_pointer(&ui->src_cached_path, g_free);
+    g_clear_pointer(&ui->src_cached_lines, g_strfreev);
+    ui->pc_file_id = -1;
+    ui->src_displayed_file_id = -1;
+    gtk_drop_down_set_model(ui->src_file_combo, NULL);
+    gtk_widget_set_sensitive(GTK_WIDGET(ui->src_file_combo), FALSE);
+    gtk_list_box_remove_all(ui->src_list);
+    ui->seen_serial = 0;
+}
+
 static void go_to_mem_addr(DebuggerUI *ui)
 {
     const char *text = gtk_editable_get_text(GTK_EDITABLE(ui->mem_addr));
@@ -364,6 +628,12 @@ static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code,
     switch (keyval) {
     case GDK_KEY_F5:
         on_run_pause(NULL, ui);
+        return TRUE;
+    case GDK_KEY_F6:
+        if (state & GDK_SHIFT_MASK)
+            cocodebug_step_over_line(ui->dbg);
+        else
+            cocodebug_step_line(ui->dbg);
         return TRUE;
     case GDK_KEY_F7:
         cocodebug_step(ui->dbg);
@@ -394,6 +664,8 @@ static void on_closed(GtkWindow *window, gpointer user_data)
     cocodebug_set_engaged(ui->dbg, 0);
     g_ui = NULL;
     g_free(ui->video_buf);
+    g_free(ui->src_cached_path);
+    g_strfreev(ui->src_cached_lines);
     g_free(ui);
 }
 
@@ -413,7 +685,7 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     DebuggerUI *ui;
     cocodebug *dbg;
     GtkWidget *box, *panes, *scroller, *regbox, *header, *bar, *mem_bar,
-              *mem_scroller;
+              *mem_scroller, *src_box, *src_scroller;
     GtkEventController *keys;
 
     if (g_ui) {
@@ -435,13 +707,16 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     ui = g_new0(DebuggerUI, 1);
     ui->session = session;
     ui->dbg = dbg;
+    ui->pc_file_id = -1;
+    ui->src_displayed_file_id = -1;
+    ui->src_cached_lines = g_new0(char *, 1); /* empty, NUL-terminated */
     ui->video_buf = g_malloc0((gsize)COCOVIDEO_MAX_WIDTH *
                               COCOVIDEO_MAX_HEIGHT * sizeof(uint32_t));
     g_ui = ui;
 
     ui->window = GTK_WINDOW(adw_window_new());
     gtk_window_set_title(ui->window, "Debugger");
-    gtk_window_set_default_size(ui->window, 640, 720);
+    gtk_window_set_default_size(ui->window, 980, 720);
     gtk_window_set_transient_for(ui->window, parent);
 
     header = adw_header_bar_new();
@@ -467,6 +742,18 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
                    tool_button("Step Ou_t", "Until this routine returns "
                                             "(Shift+F8)",
                                G_CALLBACK(on_step_out), ui));
+    ui->step_line = GTK_BUTTON(tool_button(
+        "Step L_ine",
+        "Run until a different C source line (F6). Needs C source info "
+        "loaded.",
+        G_CALLBACK(on_step_line), ui));
+    gtk_box_append(GTK_BOX(bar), GTK_WIDGET(ui->step_line));
+    ui->step_over_line = GTK_BUTTON(tool_button(
+        "Step Over Lin_e",
+        "Like Step Line, but a call on this line runs to completion rather "
+        "than being stepped into (Shift+F6).",
+        G_CALLBACK(on_step_over_line), ui));
+    gtk_box_append(GTK_BOX(bar), GTK_WIDGET(ui->step_over_line));
     gtk_box_append(GTK_BOX(bar),
                    tool_button("_Clear Breakpoints",
                                "Remove every breakpoint",
@@ -482,6 +769,17 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
                                "Drop loaded symbols, keeping the built-in "
                                "Color BASIC entry points",
                                G_CALLBACK(on_clear_symbols), ui));
+    gtk_box_append(GTK_BOX(bar),
+                   tool_button("Load C _Source…",
+                               "Load a CMOC listing (.lst, from `cmoc -i`) "
+                               "for source-level stepping and locals. Its "
+                               "sibling .map (also only kept by -i) is "
+                               "found automatically.",
+                               G_CALLBACK(on_load_source), ui));
+    gtk_box_append(GTK_BOX(bar),
+                   tool_button("Clear C So_urce",
+                               "Drop loaded C source info",
+                               G_CALLBACK(on_clear_source), ui));
 
     ui->disasm = GTK_LIST_BOX(gtk_list_box_new());
     gtk_list_box_set_selection_mode(ui->disasm, GTK_SELECTION_NONE);
@@ -493,6 +791,24 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     gtk_widget_set_hexpand(scroller, TRUE);
     gtk_widget_set_vexpand(scroller, TRUE);
 
+    ui->src_file_combo = GTK_DROP_DOWN(gtk_drop_down_new(NULL, NULL));
+    gtk_widget_set_sensitive(GTK_WIDGET(ui->src_file_combo), FALSE);
+    g_signal_connect(ui->src_file_combo, "notify::selected",
+                     G_CALLBACK(on_src_file_changed), ui);
+    ui->src_list = GTK_LIST_BOX(gtk_list_box_new());
+    gtk_list_box_set_selection_mode(ui->src_list, GTK_SELECTION_NONE);
+    g_signal_connect(ui->src_list, "row-activated",
+                     G_CALLBACK(on_src_row_activated), ui);
+    src_scroller = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(src_scroller),
+                                  GTK_WIDGET(ui->src_list));
+    gtk_widget_set_hexpand(src_scroller, TRUE);
+    gtk_widget_set_vexpand(src_scroller, TRUE);
+    src_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_box_append(GTK_BOX(src_box), GTK_WIDGET(ui->src_file_combo));
+    gtk_box_append(GTK_BOX(src_box), src_scroller);
+    gtk_widget_set_hexpand(src_box, TRUE);
+
     ui->regs = GTK_LABEL(gtk_label_new(""));
     gtk_label_set_xalign(ui->regs, 0.0f);
     gtk_label_set_yalign(ui->regs, 0.0f);
@@ -502,6 +818,12 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     gtk_widget_set_margin_end(regbox, 12);
     gtk_widget_set_margin_top(regbox, 6);
     gtk_box_append(GTK_BOX(regbox), GTK_WIDGET(ui->regs));
+
+    ui->locals = GTK_LABEL(gtk_label_new(""));
+    gtk_label_set_xalign(ui->locals, 0.0f);
+    gtk_label_set_yalign(ui->locals, 0.0f);
+    gtk_widget_add_css_class(GTK_WIDGET(ui->locals), "monospace");
+    gtk_box_append(GTK_BOX(regbox), GTK_WIDGET(ui->locals));
 
     ui->video = GTK_PICTURE(gtk_picture_new());
     /* CONTAIN: letterbox rather than distort -- modes vary in aspect (a
@@ -516,6 +838,7 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
 
     panes = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_box_append(GTK_BOX(panes), scroller);
+    gtk_box_append(GTK_BOX(panes), src_box);
     gtk_box_append(GTK_BOX(panes), regbox);
 
     mem_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);

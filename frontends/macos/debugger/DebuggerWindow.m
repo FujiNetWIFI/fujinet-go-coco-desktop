@@ -30,6 +30,12 @@
  *     "   ; NAME" suffix (matching GNOME/Windows) rather than a label
  *     line of its own.
  *
+ * C source-level stepping (added after the port above, for CMOC-built
+ * programs): a source pane over cocodebug_source_*, a Locals pane over
+ * cocodebug_locals_get, and Step Line/Step Over Line -- the same additions
+ * GNOME/KDE/Windows all got. See core/debugger/csrcinfo.h for what CMOC
+ * emits and how it maps back to source lines.
+ *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -41,6 +47,7 @@
 
 #define DISASM_LINES 40
 #define MEM_ROWS 16
+#define LOCALS_MAX 32
 
 static DebuggerWindow *g_debugger;
 
@@ -73,9 +80,35 @@ static DebuggerWindow *g_debugger;
 }
 @end
 
+/* Source text view: same click-to-toggle idea as DasmTextView, but simpler
+ * -- there is no address to parse out of the row, because every row is
+ * exactly one line of the source file (populateSrcList: prints every line,
+ * filtering none out), so the 0-based line count of newlines before the
+ * click is the line number directly. */
+@interface SrcTextView : NSTextView
+@property(nonatomic, copy) void (^onToggleLine)(int lineno);
+@end
+
+@implementation SrcTextView
+- (void)mouseDown:(NSEvent *)event
+{
+    NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+    NSUInteger idx = [self characterIndexForInsertionAtPoint:p];
+    NSString *text = self.string;
+    if (idx > text.length)
+        idx = text.length;
+    NSUInteger start = [text lineRangeForRange:NSMakeRange(idx, 0)].location;
+    NSString *prefix = [text substringToIndex:start];
+    NSUInteger lineIndex = [[prefix componentsSeparatedByString:@"\n"] count] - 1;
+    if (self.onToggleLine)
+        self.onToggleLine((int)lineIndex + 1);
+}
+@end
+
 @interface DebuggerWindow () <NSWindowDelegate>
 - (instancetype)initWithSession:(cocosession *)session;
 - (void)refreshDisasm;
+- (void)populateSrcList:(int)fileId;
 @end
 
 @implementation DebuggerWindow {
@@ -95,6 +128,23 @@ static DebuggerWindow *g_debugger;
     NSTextField *_memAddr;
     NSTextView *_memView;
     uint16_t _memBase;
+
+    NSButton *_stepLineBtn;
+    NSButton *_stepOverLineBtn;
+    NSPopUpButton *_srcFileCombo;
+    SrcTextView *_srcView;
+    NSTextView *_locals;
+    /* The source pane's own cache: which file's text is currently held in
+     * _srcCachedLines, so a stop that doesn't change the displayed file
+     * doesn't re-read it from disk. */
+    NSString *_srcCachedPath;
+    NSArray<NSString *> *_srcCachedLines;
+    int _srcDisplayedFileId;
+    /* Where PC actually is, independent of which file the combo is showing
+     * (a user may be browsing a different file to set a breakpoint ahead of
+     * time): the '>' marker only appears when these match the displayed
+     * file. */
+    int _pcFileId, _pcLine;
 
     NSTimer *_tick;
     uint64_t _seenSerial;
@@ -144,6 +194,8 @@ static NSImage *imageFromXRGB(const uint32_t *px, int w, int h)
     _session = session;
     _dbg = cocosession_debugger(session);
     _memBase = 0;
+    _pcFileId = -1;
+    _srcDisplayedFileId = -1;
     _videoBuf = (uint32_t *)calloc((size_t)COCOVIDEO_MAX_WIDTH *
                                    COCOVIDEO_MAX_HEIGHT, sizeof(uint32_t));
     [self buildWindow];
@@ -225,31 +277,47 @@ static NSTextView *monoView(NSScrollView **scrollOut)
                                   action:@selector(stepOver:)];
     NSButton *stepOutBtn = [self button:@"Step Out (⇧F8)"
                                  action:@selector(stepOut:)];
+    _stepLineBtn = [self button:@"Step Line (F6)" action:@selector(stepLine:)];
+    _stepOverLineBtn = [self button:@"Step Over Line (⇧F6)"
+                             action:@selector(stepOverLine:)];
     NSButton *clearBpBtn = [self button:@"Clear Breakpoints"
                                  action:@selector(clearBreakpoints:)];
     NSButton *loadSymBtn = [self button:@"Load Symbols…"
                                  action:@selector(loadSymbols:)];
     NSButton *clearSymBtn = [self button:@"Clear Symbols"
                                   action:@selector(clearSymbols:)];
+    NSButton *loadSrcBtn = [self button:@"Load C Source…"
+                                 action:@selector(loadSource:)];
+    NSButton *clearSrcBtn = [self button:@"Clear C Source"
+                                  action:@selector(clearSource:)];
     _runBtn.keyEquivalent =
         [NSString stringWithFormat:@"%C", (unichar)NSF5FunctionKey];
     stepBtn.keyEquivalent =
         [NSString stringWithFormat:@"%C", (unichar)NSF7FunctionKey];
     stepOverBtn.keyEquivalent =
         [NSString stringWithFormat:@"%C", (unichar)NSF8FunctionKey];
+    /* Plain F6, the same way stepBtn/stepOverBtn wire an unshifted F-key.
+     * Shift+F6 has no equivalent here for the same reason Shift+F8 above
+     * (stepOutBtn) does not either: AppKit's keyEquivalent alone does not
+     * distinguish the shifted case, and this file has never wired
+     * keyEquivalentModifierMask to do it -- the title is a hint, the click
+     * is what actually works, same as Step Out today. */
+    _stepLineBtn.keyEquivalent =
+        [NSString stringWithFormat:@"%C", (unichar)NSF6FunctionKey];
 
     _status = [self label:@"Running"];
     _status.alignment = NSTextAlignmentRight;
 
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
-        _runBtn, stepBtn, stepOverBtn, stepOutBtn, clearBpBtn, loadSymBtn,
-        clearSymBtn, _status
+        _runBtn, stepBtn, stepOverBtn, stepOutBtn, _stepLineBtn,
+        _stepOverLineBtn, clearBpBtn, loadSymBtn, clearSymBtn, loadSrcBtn,
+        clearSrcBtn, _status
     ]];
     toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     toolbar.spacing = 8;
 
-    /* Disassembly on the left, registers + video + memory stacked on the
-     * right, in one split view -- no tabs. */
+    /* Disassembly, C source, and registers+locals+video+memory, in one
+     * split view -- no tabs. */
     NSScrollView *dasmScroll = [[NSScrollView alloc] init];
     dasmScroll.hasVerticalScroller = YES;
     _disasm = [[DasmTextView alloc] initWithFrame:NSMakeRect(0, 0, 560, 600)];
@@ -268,9 +336,48 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     };
     dasmScroll.documentView = _disasm;
 
+    /* C source column: a file picker over cocodebug_source_file_path()'s
+     * table (selected index and file_id are the same number: rebuildSrcCombo
+     * appends items in exactly the id order the engine hands them out) above
+     * the listing itself. */
+    _srcFileCombo = [[NSPopUpButton alloc] initWithFrame:NSZeroRect
+                                                pullsDown:NO];
+    _srcFileCombo.target = self;
+    _srcFileCombo.action = @selector(srcFileChanged:);
+    _srcFileCombo.enabled = NO;
+
+    NSScrollView *srcScroll = [[NSScrollView alloc] init];
+    srcScroll.hasVerticalScroller = YES;
+    _srcView = [[SrcTextView alloc] initWithFrame:NSMakeRect(0, 0, 400, 560)];
+    _srcView.editable = NO;
+    _srcView.richText = NO;
+    _srcView.font = [NSFont monospacedSystemFontOfSize:11
+                                                weight:NSFontWeightRegular];
+    _srcView.autoresizingMask = NSViewWidthSizable;
+    _srcView.onToggleLine = ^(int lineno) {
+        DebuggerWindow *s = weakSelf;
+        if (!s)
+            return;
+        cocodebug_source_breakpoint_toggle(s->_dbg, s->_srcDisplayedFileId,
+                                           lineno);
+        [s populateSrcList:s->_srcDisplayedFileId];
+    };
+    srcScroll.documentView = _srcView;
+
+    NSStackView *srcCol = [NSStackView stackViewWithViews:@[
+        _srcFileCombo, srcScroll
+    ]];
+    srcCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+    srcCol.alignment = NSLayoutAttributeLeading;
+    srcCol.spacing = 4;
+
     NSScrollView *regsScroll;
     _regs = monoView(&regsScroll);
     [regsScroll.heightAnchor constraintEqualToConstant:130].active = YES;
+
+    NSScrollView *localsScroll;
+    _locals = monoView(&localsScroll);
+    [localsScroll.heightAnchor constraintEqualToConstant:110].active = YES;
 
     _video = [[NSImageView alloc] init];
     _video.imageScaling = NSImageScaleProportionallyUpOrDown;
@@ -291,8 +398,9 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     _memView = monoView(&memScroll);
 
     NSStackView *side = [NSStackView stackViewWithViews:@[
-        [self label:@"Registers"], regsScroll, [self label:@"Video"], _video,
-        [self label:@"Memory"], memRow, memScroll
+        [self label:@"Registers"], regsScroll, [self label:@"Locals"],
+        localsScroll, [self label:@"Video"], _video, [self label:@"Memory"],
+        memRow, memScroll
     ]];
     side.orientation = NSUserInterfaceLayoutOrientationVertical;
     side.alignment = NSLayoutAttributeLeading;
@@ -301,6 +409,7 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     NSSplitView *split = [[NSSplitView alloc] init];
     split.vertical = YES;
     [split addArrangedSubview:dasmScroll];
+    [split addArrangedSubview:srcCol];
     [split addArrangedSubview:side];
 
     NSStackView *root = [NSStackView stackViewWithViews:@[ toolbar, split ]];
@@ -315,6 +424,7 @@ static NSTextView *monoView(NSScrollView **scrollOut)
         YES;
 
     _window.contentView = root;
+    [_window setContentSize:NSMakeSize(1500, 820)];
     [_window center];
 }
 
@@ -369,6 +479,18 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     cocodebug_step_out(_dbg);
 }
 
+- (void)stepLine:(id)sender
+{
+    (void)sender;
+    cocodebug_step_line(_dbg);
+}
+
+- (void)stepOverLine:(id)sender
+{
+    (void)sender;
+    cocodebug_step_over_line(_dbg);
+}
+
 - (void)clearBreakpoints:(id)sender
 {
     (void)sender;
@@ -399,6 +521,46 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     cocodebug_symbols_clear(_dbg);
     if (cocodebug_is_paused(_dbg))
         [self refreshDisasm];
+}
+
+- (void)loadSource:(id)sender
+{
+    (void)sender;
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = @"Load C Source";
+    /* No allowedContentTypes: ".lst" is not a registered UTType either, and
+     * leaving this unset is what shows every file, same reasoning as
+     * loadSymbols: above. */
+    if ([panel runModal] != NSModalResponseOK || !panel.URL)
+        return;
+    if (cocodebug_source_load(_dbg, panel.URL.path.UTF8String) < 0) {
+        _status.stringValue =
+            @"Could not open listing or its .map (both need `cmoc -i`)";
+        return;
+    }
+    _srcCachedPath = nil; /* the file list may have changed */
+    [self rebuildSrcCombo];
+}
+
+- (void)clearSource:(id)sender
+{
+    (void)sender;
+    cocodebug_source_clear(_dbg);
+    _srcCachedPath = nil;
+    _srcCachedLines = nil;
+    _pcFileId = -1;
+    _srcDisplayedFileId = -1;
+    [_srcFileCombo removeAllItems];
+    _srcFileCombo.enabled = NO;
+    _srcView.string = @"";
+}
+
+- (void)srcFileChanged:(id)sender
+{
+    (void)sender;
+    NSInteger idx = _srcFileCombo.indexOfSelectedItem;
+    if (idx >= 0)
+        [self populateSrcList:(int)idx];
 }
 
 - (void)gotoMem:(id)sender
@@ -433,9 +595,14 @@ static NSTextView *monoView(NSScrollView **scrollOut)
 {
     _runBtn.title = paused ? @"Run (F5)" : @"Pause (F5)";
     _status.stringValue = paused ? @"Paused" : @"Running";
+    BOOL srcAvail = cocodebug_source_available(_dbg);
+    _stepLineBtn.enabled = srcAvail;
+    _stepOverLineBtn.enabled = srcAvail;
     if (paused) {
         [self refreshDisasm];
         [self refreshRegs];
+        [self refreshSource];
+        [self refreshLocals];
         [self refreshMem];
         [self refreshVideo];
     } else {
@@ -443,6 +610,8 @@ static NSTextView *monoView(NSScrollView **scrollOut)
          * clear it rather than leave a stale snapshot that looks live. */
         _disasm.string = @"";
         _regs.string = @"";
+        _srcView.string = @"";
+        _locals.string = @"";
         _memView.string = @"";
         _video.image = nil;
     }
@@ -494,6 +663,120 @@ static NSTextView *monoView(NSScrollView **scrollOut)
                          @"CC  %02X  %s",
                          r.pc, r.a, r.b, r.x, r.dp, r.y, r.u, r.s, r.cc,
                          bits];
+}
+
+- (void)refreshLocals
+{
+    if (!cocodebug_source_available(_dbg)) {
+        _locals.string = @"";
+        return;
+    }
+    cocodebug_local locals[LOCALS_MAX];
+    int n = cocodebug_locals_get(_dbg, locals, LOCALS_MAX);
+    if (n == 0) {
+        /* Not necessarily an error: PC may just be before the function's
+         * first statement (mid-prologue), where there is nothing correct to
+         * show yet. */
+        _locals.string = @"(no locals in scope)";
+        return;
+    }
+    NSMutableString *text = [NSMutableString string];
+    for (int i = 0; i < n; i++) {
+        const cocodebug_local *v = &locals[i];
+        if (v->has_value)
+            [text appendFormat:@"%-12s %-10s %s= %u ($%X)\n", v->name,
+                               v->type, v->is_param ? "(param) " : "",
+                               v->value, v->value];
+        else
+            [text appendFormat:@"%-12s %-10s %s= ?\n", v->name, v->type,
+                               v->is_param ? "(param) " : ""];
+    }
+    _locals.string = text;
+}
+
+/* Loads (and caches) fileId's text, then redraws the list with '>' on the
+ * line PC is at (if PC's file is the one showing) and '*' on any line
+ * carrying a breakpoint. Re-reading the file is cheap enough here since this
+ * only runs on an actual stop or a manual file switch, never on every
+ * 0.1s tick -- see onTick's early-out. */
+- (void)populateSrcList:(int)fileId
+{
+    const char *path = cocodebug_source_file_path(_dbg, fileId);
+    NSString *nsPath = path ? [NSString stringWithUTF8String:path] : nil;
+    _srcDisplayedFileId = fileId;
+
+    if (![nsPath isEqualToString:_srcCachedPath]) {
+        _srcCachedPath = nsPath;
+        NSString *contents =
+            nsPath ? [NSString stringWithContentsOfFile:nsPath
+                                                encoding:NSUTF8StringEncoding
+                                                   error:nil]
+                   : nil;
+        _srcCachedLines = contents ? [contents componentsSeparatedByString:@"\n"]
+                                   : @[];
+    }
+
+    NSMutableString *text = [NSMutableString string];
+    for (NSUInteger i = 0; i < _srcCachedLines.count; i++) {
+        int lineno = (int)i + 1;
+        BOOL isPc = (fileId == _pcFileId && lineno == _pcLine);
+        BOOL hasBp = cocodebug_source_breakpoint_is_set(_dbg, fileId, lineno);
+        [text appendFormat:@"%c%c %5d  %@\n", isPc ? '>' : ' ',
+                           hasBp ? '*' : ' ', lineno, _srcCachedLines[i]];
+    }
+    _srcView.string = text;
+}
+
+/* Rebuilds the file picker from cocodebug_source_file_count()/_file_path().
+ * Selected index and file_id are the same number: items are appended here in
+ * exactly the id order the engine hands them out (0..count-1). */
+- (void)rebuildSrcCombo
+{
+    [_srcFileCombo removeAllItems];
+    int n = cocodebug_source_file_count(_dbg);
+    for (int i = 0; i < n; i++) {
+        const char *path = cocodebug_source_file_path(_dbg, i);
+        NSString *full = path ? [NSString stringWithUTF8String:path] : @"";
+        NSString *base = full.lastPathComponent;
+        [_srcFileCombo addItemWithTitle:base.length ? base : full];
+    }
+    _srcFileCombo.enabled = (n > 0);
+    if (n > 0) {
+        [_srcFileCombo selectItemAtIndex:0];
+        [self populateSrcList:0];
+    } else {
+        _srcView.string = @"";
+    }
+}
+
+/* Follows PC's file automatically. If PC is not itself a mapped statement
+ * (mid-prologue, or code with no line info), keeps showing whatever file
+ * was last selected and just drops the '>' marker rather than guess. */
+- (void)refreshSource
+{
+    if (!cocodebug_source_available(_dbg)) {
+        _srcView.string = @"";
+        return;
+    }
+    cocodebug_regs r;
+    if (!cocodebug_regs_get(_dbg, &r))
+        return;
+    int fid, line;
+    if (cocodebug_source_line_at(_dbg, r.pc, &fid, &line)) {
+        _pcFileId = fid;
+        _pcLine = line;
+        if (_srcFileCombo.indexOfSelectedItem != fid) {
+            [_srcFileCombo selectItemAtIndex:fid];
+            [self populateSrcList:fid];
+        } else {
+            [self populateSrcList:_srcDisplayedFileId];
+        }
+    } else {
+        _pcFileId = -1;
+        _pcLine = -1;
+        if (_srcFileCombo.numberOfItems > 0)
+            [self populateSrcList:_srcDisplayedFileId];
+    }
 }
 
 - (void)refreshMem

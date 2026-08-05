@@ -14,6 +14,8 @@
 
 #include "debugger/DebuggerWindow.h"
 
+#include <QComboBox>
+#include <QFile>
 #include <QFileDialog>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -26,6 +28,8 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QShortcut>
+#include <QSignalBlocker>
+#include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVector>
@@ -53,7 +57,7 @@ public:
           m_videoBuf((size_t)COCOVIDEO_MAX_WIDTH * COCOVIDEO_MAX_HEIGHT, 0)
     {
         setWindowTitle(QStringLiteral("Debugger"));
-        resize(680, 760);
+        resize(980, 760);
 
         auto *outer = new QVBoxLayout(this);
 
@@ -73,6 +77,17 @@ public:
         addButton(bar, QStringLiteral("Step Out"),
                   QStringLiteral("Until this routine returns (Shift+F8)"),
                   [this] { cocodebug_step_out(m_dbg); });
+        m_stepLine = addButton(
+            bar, QStringLiteral("Step Line"),
+            QStringLiteral("Run until a different C source line (F6). Needs "
+                           "C source info loaded."),
+            [this] { cocodebug_step_line(m_dbg); });
+        m_stepOverLine = addButton(
+            bar, QStringLiteral("Step Over Line"),
+            QStringLiteral("Like Step Line, but a call on this line runs to "
+                           "completion rather than being stepped into "
+                           "(Shift+F6)."),
+            [this] { cocodebug_step_over_line(m_dbg); });
         addButton(bar, QStringLiteral("Clear Breakpoints"),
                   QStringLiteral("Remove every breakpoint"), [this] {
                       cocodebug_breakpoint_clear_all(m_dbg);
@@ -88,6 +103,20 @@ public:
                                  "Color BASIC entry points"),
                   [this] {
                       cocodebug_symbols_clear(m_dbg);
+                      m_seenSerial = 0;
+                  });
+        addButton(bar, QStringLiteral("Load C Source…"),
+                  QStringLiteral("Load a CMOC listing (.lst, from `cmoc -i`) "
+                                 "for source-level stepping and locals. Its "
+                                 "sibling .map (also only kept by -i) is "
+                                 "found automatically."),
+                  [this] { loadSource(); });
+        addButton(bar, QStringLiteral("Clear C Source"),
+                  QStringLiteral("Drop loaded C source info"), [this] {
+                      cocodebug_source_clear(m_dbg);
+                      m_srcFileCombo->clear();
+                      m_srcCachedPath.clear();
+                      m_pcFileId = -1;
                       m_seenSerial = 0;
                   });
         bar->addStretch();
@@ -106,12 +135,40 @@ public:
                 });
         panes->addWidget(m_disasm, 1);
 
+        auto *srcCol = new QVBoxLayout;
+        m_srcFileCombo = new QComboBox(this);
+        m_srcFileCombo->setEnabled(false);
+        connect(m_srcFileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int idx) {
+                    if (idx < 0 || !m_dbg)
+                        return;
+                    populateSourceList(m_srcFileCombo->itemData(idx).toInt());
+                });
+        srcCol->addWidget(m_srcFileCombo);
+        m_srcList = new QListWidget(this);
+        m_srcList->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        connect(m_srcList, &QListWidget::itemClicked, this,
+                [this](QListWidgetItem *item) {
+                    cocodebug_source_breakpoint_toggle(
+                        m_dbg, m_srcDisplayedFileId,
+                        item->data(Qt::UserRole).toInt());
+                    m_seenSerial = 0;
+                });
+        srcCol->addWidget(m_srcList, 1);
+        panes->addLayout(srcCol, 1);
+
         auto *sidebar = new QVBoxLayout;
         m_regs = new QLabel(this);
         m_regs->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
         m_regs->setAlignment(Qt::AlignTop | Qt::AlignLeft);
         m_regs->setMinimumWidth(200);
         sidebar->addWidget(m_regs);
+
+        m_locals = new QLabel(this);
+        m_locals->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        m_locals->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+        m_locals->setWordWrap(false);
+        sidebar->addWidget(m_locals);
 
         m_video = new QLabel(this);
         m_video->setAlignment(Qt::AlignCenter);
@@ -146,6 +203,10 @@ public:
         outer->addWidget(m_mem);
 
         new QShortcut(QKeySequence(Qt::Key_F5), this, [this] { toggleRun(); });
+        new QShortcut(QKeySequence(Qt::Key_F6), this,
+                      [this] { cocodebug_step_line(m_dbg); });
+        new QShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F6), this,
+                      [this] { cocodebug_step_over_line(m_dbg); });
         new QShortcut(QKeySequence(Qt::Key_F7), this,
                       [this] { cocodebug_step(m_dbg); });
         new QShortcut(QKeySequence(Qt::Key_F8), this,
@@ -217,6 +278,121 @@ private:
         m_seenSerial = 0; /* redraw the disassembly with the new labels */
     }
 
+    void loadSource()
+    {
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("Load C Source"), QString(),
+            QStringLiteral("CMOC listings (*.lst);;All files (*)"));
+        if (path.isEmpty())
+            return;
+        if (cocodebug_source_load(m_dbg, path.toUtf8().constData()) < 0) {
+            m_status->setText(
+                QStringLiteral("Could not open listing or its .map (both "
+                               "need `cmoc -i`)"));
+            return;
+        }
+        m_srcCachedPath.clear(); /* the file list may have changed */
+        rebuildSourceCombo();
+        m_seenSerial = 0;
+    }
+
+    void rebuildSourceCombo()
+    {
+        const QSignalBlocker blocker(m_srcFileCombo);
+        m_srcFileCombo->clear();
+        const int n = cocodebug_source_file_count(m_dbg);
+        for (int i = 0; i < n; i++) {
+            const char *path = cocodebug_source_file_path(m_dbg, i);
+            const QString qpath = QString::fromUtf8(path ? path : "");
+            const int slash = qpath.lastIndexOf(QLatin1Char('/'));
+            m_srcFileCombo->addItem(
+                slash >= 0 ? qpath.mid(slash + 1) : qpath, i);
+        }
+        m_srcFileCombo->setEnabled(n > 0);
+        if (n > 0)
+            populateSourceList(m_srcFileCombo->itemData(0).toInt());
+        else
+            m_srcList->clear();
+    }
+
+    /* Loads (and caches) fileId's text, then redraws the list with '>' on
+     * the line PC is at (if PC's file is the one showing) and '*' on any
+     * line carrying a breakpoint. Re-reading the file is cheap enough here
+     * since this only runs on an actual stop or a manual file switch, never
+     * on every poll tick -- see poll()'s early-out. */
+    void populateSourceList(int fileId)
+    {
+        const char *path = cocodebug_source_file_path(m_dbg, fileId);
+        const QString qpath = QString::fromUtf8(path ? path : "");
+        m_srcDisplayedFileId = fileId;
+
+        if (qpath != m_srcCachedPath) {
+            m_srcCachedLines.clear();
+            QFile f(qpath);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream ts(&f);
+                while (!ts.atEnd())
+                    m_srcCachedLines << ts.readLine();
+            }
+            m_srcCachedPath = qpath;
+        }
+
+        m_srcList->clear();
+        int scrollTo = -1;
+        for (int i = 0; i < m_srcCachedLines.size(); i++) {
+            const int lineNo = i + 1;
+            const bool isPc = fileId == m_pcFileId && lineNo == m_pcLine;
+            const bool hasBp =
+                cocodebug_source_breakpoint_is_set(m_dbg, fileId, lineNo);
+            const QString text =
+                QStringLiteral("%1%2 %3  %4")
+                    .arg(isPc ? QLatin1Char('>') : QLatin1Char(' '))
+                    .arg(hasBp ? QLatin1Char('*') : QLatin1Char(' '))
+                    .arg(lineNo, 5)
+                    .arg(m_srcCachedLines[i]);
+            auto *item = new QListWidgetItem(text, m_srcList);
+            item->setData(Qt::UserRole, lineNo);
+            if (isPc)
+                scrollTo = m_srcList->count() - 1;
+        }
+        if (scrollTo >= 0)
+            m_srcList->setCurrentRow(scrollTo);
+    }
+
+    void updateLocalsPane(bool paused)
+    {
+        if (!paused || !cocodebug_source_available(m_dbg)) {
+            m_locals->clear();
+            return;
+        }
+        cocodebug_local locals[32];
+        const int n = cocodebug_locals_get(m_dbg, locals, 32);
+        if (n == 0) {
+            /* Not necessarily an error: PC may just be before the function's
+             * first statement (mid-prologue), where there is nothing correct
+             * to show yet. */
+            m_locals->setText(QStringLiteral("(no locals in scope)"));
+            return;
+        }
+        QString text;
+        for (int i = 0; i < n; i++) {
+            const cocodebug_local &v = locals[i];
+            const QString valueStr =
+                v.has_value
+                    ? QStringLiteral("%1 ($%2)")
+                          .arg(v.value)
+                          .arg(v.value, 0, 16)
+                    : QStringLiteral("?");
+            text += QStringLiteral("%1 %2 %3= %4\n")
+                        .arg(QString::fromUtf8(v.name).leftJustified(12))
+                        .arg(QString::fromUtf8(v.type).leftJustified(10))
+                        .arg(v.is_param ? QStringLiteral("(param) ")
+                                        : QString())
+                        .arg(valueStr);
+        }
+        m_locals->setText(text.trimmed());
+    }
+
     void poll()
     {
         const uint64_t serial = cocodebug_stop_serial(m_dbg);
@@ -236,6 +412,9 @@ private:
                                    : QStringLiteral("Pause"));
         m_status->setText(paused ? QStringLiteral("Paused")
                                  : QStringLiteral("Running"));
+        const bool srcAvail = cocodebug_source_available(m_dbg) != 0;
+        m_stepLine->setEnabled(srcAvail);
+        m_stepOverLine->setEnabled(srcAvail);
 
         m_disasm->clear();
         if (!paused) {
@@ -244,6 +423,7 @@ private:
             m_regs->clear();
             m_mem->clear();
             m_video->clear();
+            m_locals->clear();
             return;
         }
 
@@ -289,6 +469,34 @@ private:
             auto *item = new QListWidgetItem(text, m_disasm);
             item->setData(Qt::UserRole, (uint)l.addr);
         }
+
+        /* Source pane: follow PC's file automatically. If PC is not itself
+         * a mapped statement (mid-prologue, or code with no line info), keep
+         * showing whatever file was last selected and just drop the '>'
+         * marker rather than guess. */
+        if (srcAvail) {
+            int fid, line;
+            if (cocodebug_source_line_at(m_dbg, r.pc, &fid, &line)) {
+                m_pcFileId = fid;
+                m_pcLine = line;
+                int idx = -1;
+                for (int i = 0; i < m_srcFileCombo->count(); i++)
+                    if (m_srcFileCombo->itemData(i).toInt() == fid) {
+                        idx = i;
+                        break;
+                    }
+                if (idx >= 0 && idx != m_srcFileCombo->currentIndex())
+                    m_srcFileCombo->setCurrentIndex(idx); /* repopulates */
+                else
+                    populateSourceList(m_srcDisplayedFileId);
+            } else {
+                m_pcFileId = -1;
+                m_pcLine = -1;
+                if (m_srcFileCombo->count() > 0)
+                    populateSourceList(m_srcDisplayedFileId);
+            }
+        }
+        updateLocalsPane(paused);
 
         uint8_t mem[kMemBytesPerRow * kMemRows];
         const int memN = cocodebug_read(m_dbg, m_memViewAddr, mem, sizeof(mem));
@@ -355,15 +563,33 @@ private:
     cocodebug *m_dbg;
     QLabel *m_status = nullptr;
     QLabel *m_regs = nullptr;
+    QLabel *m_locals = nullptr;
     QLabel *m_video = nullptr;
     QLabel *m_mem = nullptr;
     QLineEdit *m_memAddr = nullptr;
     QListWidget *m_disasm = nullptr;
+    QComboBox *m_srcFileCombo = nullptr;
+    QListWidget *m_srcList = nullptr;
     QPushButton *m_runPause = nullptr;
+    QPushButton *m_stepLine = nullptr;
+    QPushButton *m_stepOverLine = nullptr;
     QVector<uint32_t> m_videoBuf;
     uint64_t m_seenSerial = 0;
     bool m_wasPaused = false;
     uint16_t m_memViewAddr = 0;
+
+    /* The source pane's own cache: which file's text is currently held in
+     * m_srcCachedLines, so a stop that doesn't change the displayed file
+     * doesn't re-read it from disk. */
+    QString m_srcCachedPath;
+    QStringList m_srcCachedLines;
+    int m_srcDisplayedFileId = -1;
+    /* Where PC actually is, independent of which file the combo is showing
+     * (a user may be browsing a different file to set a breakpoint ahead of
+     * time): the '>' marker only ever appears when these match the
+     * displayed file. */
+    int m_pcFileId = -1;
+    int m_pcLine = -1;
 };
 
 /* One live window at a time: a second would fight the first over the same

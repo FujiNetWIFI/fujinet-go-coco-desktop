@@ -1,0 +1,245 @@
+Section: start (hello.o) load at 2800, length 000E
+Section: code (crt.ecb_o) load at 280E, length 0063
+Section: code (negateDWord.ecb_o) load at 2871, length 0018
+Section: code (sub32.ecb_o) load at 2889, length 0021
+Section: code (sub32xu.ecb_o) load at 28AA, length 0012
+Section: code (ATOW.ecb_o) load at 28BC, length 0028
+Section: code (dwtoa.ecb_o) load at 28E4, length 00BE
+Section: code (hexdig.ecb_o) load at 29A2, length 0010
+Section: code (MUL168.ecb_o) load at 29B2, length 0011
+Section: code (printf.ecb_o) load at 29C3, length 0478
+Section: code (putchar_a.ecb_o) load at 2E3B, length 000C
+Section: code (strlen.ecb_o) load at 2E47, length 000E
+Section: code (unpackSingleAndConvertToASCII.ecb_o) load at 2E55, length 0018
+Section: code (hello.o) load at 2E6D, length 003F
+Section: constructors_start (crt.ecb_o) load at 2EAC, length 0000
+Section: constructors (/usr/share/cmoc/lib/float-ctor.ecb_o) load at 2EAC, length 000E
+Section: constructors_end (crt.ecb_o) load at 2EBA, length 0001
+Section: destructors_start (crt.ecb_o) load at 2EBB, length 0000
+Section: destructors_end (crt.ecb_o) load at 2EBB, length 0001
+Section: initgl_start (hello.o) load at 2EBC, length 0000
+Section: initgl (hello.o) load at 2EBC, length 0000
+Section: initgl_end (hello.o) load at 2EBC, length 0001
+Section: rodata (hello.o) load at 2EBD, length 0006
+Section: rwdata (hello.o) load at 2EC3, length 0000
+Section: bss (crt.ecb_o) load at 2EC3, length 000F
+Section: bss (hello.o) load at 2ED2, length 0000
+Section: program_end (hello.o) load at 2ED2, length 0000
+Symbol: \02bss (crt.ecb_o) = 2EC3
+Symbol: \02bss (hello.o) = 2ED2
+Symbol: \02code (ATOW.ecb_o) = 28BC
+Symbol: \02code (MUL168.ecb_o) = 29B2
+Symbol: \02code (crt.ecb_o) = 280E
+Symbol: \02code (dwtoa.ecb_o) = 28E4
+Symbol: \02code (hello.o) = 2E6D
+Symbol: \02code (hexdig.ecb_o) = 29A2
+Symbol: \02code (negateDWord.ecb_o) = 2871
+Symbol: \02code (printf.ecb_o) = 29C3
+Symbol: \02code (putchar_a.ecb_o) = 2E3B
+Symbol: \02code (strlen.ecb_o) = 2E47
+Symbol: \02code (sub32.ecb_o) = 2889
+Symbol: \02code (sub32xu.ecb_o) = 28AA
+Symbol: \02code (unpackSingleAndConvertToASCII.ecb_o) = 2E55
+Symbol: \02constructors (/usr/share/cmoc/lib/float-ctor.ecb_o) = 2EAC
+Symbol: \02constructors_end (crt.ecb_o) = 2EBA
+Symbol: \02constructors_start (crt.ecb_o) = 2EAC
+Symbol: \02destructors_end (crt.ecb_o) = 2EBB
+Symbol: \02destructors_start (crt.ecb_o) = 2EBB
+Symbol: \02initgl (hello.o) = 2EBC
+Symbol: \02initgl_end (hello.o) = 2EBC
+Symbol: \02initgl_start (hello.o) = 2EBC
+Symbol: \02program_end (hello.o) = 2ED2
+Symbol: \02rodata (hello.o) = 2EBD
+Symbol: \02rwdata (hello.o) = 2EC3
+Symbol: \02start (hello.o) = 2800
+Symbol: @checkPadding\0124 (printf.ecb_o) = 2B6A
+Symbol: @countHexDigitsInDWord\0124 (printf.ecb_o) = 2BA2
+Symbol: @dIsNegative\0163 (printf.ecb_o) = 2E0C
+Symbol: @decPadPrint\0124 (printf.ecb_o) = 2C3A
+Symbol: @decPadding\0124 (printf.ecb_o) = 2C1A
+Symbol: @done\0122 (crt.ecb_o) = 281D
+Symbol: @done\0124 (printf.ecb_o) = 2BBB
+Symbol: @done\0164 (printf.ecb_o) = 2E1E
+Symbol: @done\0166 (printf.ecb_o) = 2E2D
+Symbol: @done\0167 (printf.ecb_o) = 2E39
+Symbol: @done\017 (putchar_a.ecb_o) = 2E43
+Symbol: @donePrinting\0162 (printf.ecb_o) = 2DFE
+Symbol: @evalWidth\0124 (printf.ecb_o) = 2A3C
+Symbol: @finishedStr\0124 (printf.ecb_o) = 2AF5
+Symbol: @getStrAddr\0124 (printf.ecb_o) = 2AE7
+Symbol: @hexWord\0124 (printf.ecb_o) = 2AA9
+Symbol: @highNybbleNotNull\0124 (printf.ecb_o) = 2BB7
+Symbol: @highWordZero\0124 (printf.ecb_o) = 2BE8
+Symbol: @l0\0124 (printf.ecb_o) = 2B71
+Symbol: @l1\0124 (printf.ecb_o) = 2B99
+Symbol: @l3\0124 (printf.ecb_o) = 2A8B
+Symbol: @longNotNeg\0124 (printf.ecb_o) = 2B44
+Symbol: @loop\0122 (crt.ecb_o) = 2817
+Symbol: @loop\014 (strlen.ecb_o) = 2E49
+Symbol: @negativeRuntimeWidth\0124 (printf.ecb_o) = 2A16
+Symbol: @negativeWidth_0S\0124 (printf.ecb_o) = 2C0E
+Symbol: @negativeWidth_18S\0124 (printf.ecb_o) = 2C50
+Symbol: @nextDWordByte\0124 (printf.ecb_o) = 2BA3
+Symbol: @noHexPadding\0124 (printf.ecb_o) = 2BD1
+Symbol: @noHexRightPad\0124 (printf.ecb_o) = 2C02
+Symbol: @noMinusNeeded\0124 (printf.ecb_o) = 2C33
+Symbol: @noPadding\0124 (printf.ecb_o) = 2C45
+Symbol: @noWidth\0124 (printf.ecb_o) = 2A49
+Symbol: @noZeroPadding\0124 (printf.ecb_o) = 2A3A
+Symbol: @nonNullByte\0124 (printf.ecb_o) = 2BAE
+Symbol: @notChar\0124 (printf.ecb_o) = 2B08
+Symbol: @notFloat\0124 (printf.ecb_o) = 2B18
+Symbol: @notLowerCaseX\0124 (printf.ecb_o) = 2AC1
+Symbol: @notMinus\0124 (printf.ecb_o) = 2A26
+Symbol: @notMinusAsterisk\0124 (printf.ecb_o) = 2A1A
+Symbol: @notNUL\0124 (printf.ecb_o) = 2A01
+Symbol: @notPointer\0124 (printf.ecb_o) = 2ADA
+Symbol: @notSignedInt\0124 (printf.ecb_o) = 2AA5
+Symbol: @notString\0124 (printf.ecb_o) = 2AFA
+Symbol: @notUnsignedInt\0124 (printf.ecb_o) = 2A63
+Symbol: @oneDigitNeeded\0124 (printf.ecb_o) = 2BB9
+Symbol: @percentMarker\0123 (printf.ecb_o) = 29EC
+Symbol: @positive\01179 (unpackSingleAndConvertToASCII.ecb_o) = 2E67
+Symbol: @print\0162 (printf.ecb_o) = 2DF4
+Symbol: @printBuffer\0124 (printf.ecb_o) = 2B84
+Symbol: @printCond\0124 (printf.ecb_o) = 2B8C
+Symbol: @printLoop\0124 (printf.ecb_o) = 2B88
+Symbol: @runtimeWidth\0124 (printf.ecb_o) = 2A43
+Symbol: @signDone\01179 (unpackSingleAndConvertToASCII.ecb_o) = 2E69
+Symbol: @signedIntNotNegative\0124 (printf.ecb_o) = 2A7B
+Symbol: @slong\0124 (printf.ecb_o) = 2B37
+Symbol: @subAbsWidthFromD_0S\0124 (printf.ecb_o) = 2C07
+Symbol: @subAbsWidthFromD_18S\0124 (printf.ecb_o) = 2C47
+Symbol: @ulong\0124 (printf.ecb_o) = 2B44
+Symbol: @unknownCode\0126 (printf.ecb_o) = 2C5F
+Symbol: @writePadChars\0124 (printf.ecb_o) = 2C11
+Symbol: @xlong\0124 (printf.ecb_o) = 2BBC
+Symbol: ATOW (ATOW.ecb_o) = 28BC
+Symbol: ATW100 (ATOW.ecb_o) = 28C0
+Symbol: ATW900 (ATOW.ecb_o) = 28E0
+Symbol: CHROUT (crt.ecb_o) = 2ECD
+Symbol: EXIT10 (crt.ecb_o) = 2862
+Symbol: HEXDIG (hexdig.ecb_o) = 29A2
+Symbol: INILIB (crt.ecb_o) = 280E
+Symbol: INISTK (crt.ecb_o) = 2EC3
+Symbol: INITGL (hello.o) = 2EBC
+Symbol: MUL168 (MUL168.ecb_o) = 29B2
+Symbol: PADHEX (printf.ecb_o) = 2CDF
+Symbol: PADSTR_050 (printf.ecb_o) = 2CBC
+Symbol: PADSTR_100 (printf.ecb_o) = 2CBE
+Symbol: PADSTR_900 (printf.ecb_o) = 2CC8
+Symbol: PADSTR_POST (printf.ecb_o) = 2CCC
+Symbol: PADSTR_PRE (printf.ecb_o) = 2CAD
+Symbol: PADWRD (printf.ecb_o) = 2C73
+Symbol: PHX020 (printf.ecb_o) = 2CF0
+Symbol: PHX030 (printf.ecb_o) = 2CF8
+Symbol: PHX050 (printf.ecb_o) = 2D00
+Symbol: PHX060 (printf.ecb_o) = 2D05
+Symbol: PHX900 (printf.ecb_o) = 2D0F
+Symbol: PRINTC (printf.ecb_o) = 2DC5
+Symbol: PRINTS (printf.ecb_o) = 2DCE
+Symbol: PRNTWD (printf.ecb_o) = 2D6E
+Symbol: PRNTWH (printf.ecb_o) = 2D19
+Symbol: PRS010 (printf.ecb_o) = 2DD4
+Symbol: PRS020 (printf.ecb_o) = 2DD7
+Symbol: PRWD10 (printf.ecb_o) = 2D72
+Symbol: PRWD20 (printf.ecb_o) = 2D7E
+Symbol: PRWD30 (printf.ecb_o) = 2D8A
+Symbol: PRWD40 (printf.ecb_o) = 2D96
+Symbol: PRWD60 (printf.ecb_o) = 2DA9
+Symbol: PRWD70 (printf.ecb_o) = 2DB7
+Symbol: PRWD80 (printf.ecb_o) = 2DB9
+Symbol: PRWD90 (printf.ecb_o) = 2DC3
+Symbol: PRWH10 (printf.ecb_o) = 2D28
+Symbol: PRWH30 (printf.ecb_o) = 2D58
+Symbol: PRWH40 (printf.ecb_o) = 2D61
+Symbol: PRWH99 (printf.ecb_o) = 2D6C
+Symbol: PWD020 (printf.ecb_o) = 2C84
+Symbol: PWD030 (printf.ecb_o) = 2C8C
+Symbol: PWD040 (printf.ecb_o) = 2C94
+Symbol: PWD050 (printf.ecb_o) = 2C9C
+Symbol: PWD060 (printf.ecb_o) = 2CA1
+Symbol: PWD900 (printf.ecb_o) = 2CAB
+Symbol: S00131 (hello.o) = 2EBD
+Symbol: _add (hello.o) = 2E6D
+Symbol: _dwtoa (dwtoa.ecb_o) = 2924
+Symbol: _exit (crt.ecb_o) = 285C
+Symbol: _main (hello.o) = 2E7D
+Symbol: _printf (printf.ecb_o) = 29C3
+Symbol: _putchar (putchar_a.ecb_o) = 2E3B
+Symbol: _strlen (strlen.ecb_o) = 2E47
+Symbol: _vprintf (printf.ecb_o) = 29CF
+Symbol: absoluteX (printf.ecb_o) = 2E10
+Symbol: bss_end (hello.o) = 2ED2
+Symbol: bss_start (hello.o) = 2ED2
+Symbol: constructors (crt.ecb_o) = 2EAC
+Symbol: decAbsOfD (printf.ecb_o) = 2E02
+Symbol: destructors (crt.ecb_o) = 2EBB
+Symbol: doDigit (dwtoa.ecb_o) = 28E4
+Symbol: doDigit_010 (dwtoa.ecb_o) = 28EC
+Symbol: doDigit_020 (dwtoa.ecb_o) = 2914
+Symbol: doDigit_030 (dwtoa.ecb_o) = 2918
+Symbol: dwtoa_010 (dwtoa.ecb_o) = 293A
+Symbol: dwtoa_020 (dwtoa.ecb_o) = 295A
+Symbol: dwtoa_030 (dwtoa.ecb_o) = 296A
+Symbol: dwtoa_040 (dwtoa.ecb_o) = 2978
+Symbol: end_of_sbrk_mem (crt.ecb_o) = 2EC9
+Symbol: funcend_add (hello.o) = 2E7D
+Symbol: funcend_main (hello.o) = 2EAC
+Symbol: funcsize_add (hello.o) = 2E7D
+Symbol: funcsize_main (hello.o) = 2E9C
+Symbol: l_bss (<synthetic>) = 000F
+Symbol: l_code (<synthetic>) = 069E
+Symbol: l_constructors (<synthetic>) = 000E
+Symbol: l_constructors_end (<synthetic>) = 0001
+Symbol: l_constructors_start (<synthetic>) = 0000
+Symbol: l_destructors_end (<synthetic>) = 0001
+Symbol: l_destructors_start (<synthetic>) = 0000
+Symbol: l_initgl (<synthetic>) = 0000
+Symbol: l_initgl_end (<synthetic>) = 0001
+Symbol: l_initgl_start (<synthetic>) = 0000
+Symbol: l_program_end (<synthetic>) = 0000
+Symbol: l_rodata (<synthetic>) = 0006
+Symbol: l_rwdata (<synthetic>) = 0000
+Symbol: l_start (<synthetic>) = 000E
+Symbol: leftPadU (printf.ecb_o) = 2A56
+Symbol: leftPadX (printf.ecb_o) = 2AB2
+Symbol: mainLoop (printf.ecb_o) = 29DD
+Symbol: main_return_address (hello.o) = 2809
+Symbol: negateDWord (negateDWord.ecb_o) = 2871
+Symbol: nop_handler (crt.ecb_o) = 2870
+Symbol: notLong (printf.ecb_o) = 2C54
+Symbol: null_ptr_handler (crt.ecb_o) = 2EC5
+Symbol: powersOfTen (dwtoa.ecb_o) = 297E
+Symbol: printMinusIfNegative (printf.ecb_o) = 2E1F
+Symbol: printMinusIfNegativeAndCorrectPadChar (printf.ecb_o) = 2E2E
+Symbol: printReal (printf.ecb_o) = 2DDD
+Symbol: processPercentChars (printf.ecb_o) = 29F4
+Symbol: program_break (crt.ecb_o) = 2ECB
+Symbol: program_end (hello.o) = 2ED2
+Symbol: program_start (hello.o) = 2800
+Symbol: putchar_a (putchar_a.ecb_o) = 2E3D
+Symbol: return (printf.ecb_o) = 2C6F
+Symbol: s_bss (<synthetic>) = 2EC3
+Symbol: s_code (<synthetic>) = 280E
+Symbol: s_constructors (<synthetic>) = 2EAC
+Symbol: s_constructors_end (<synthetic>) = 2EBA
+Symbol: s_constructors_start (<synthetic>) = 2EAC
+Symbol: s_destructors_end (<synthetic>) = 2EBB
+Symbol: s_destructors_start (<synthetic>) = 2EBB
+Symbol: s_initgl (<synthetic>) = 2EBC
+Symbol: s_initgl_end (<synthetic>) = 2EBC
+Symbol: s_initgl_start (<synthetic>) = 2EBC
+Symbol: s_program_end (<synthetic>) = 2ED2
+Symbol: s_rodata (<synthetic>) = 2EBD
+Symbol: s_rwdata (<synthetic>) = 2EC3
+Symbol: s_start (<synthetic>) = 2800
+Symbol: singlePrecisionSize (crt.ecb_o) = 2ED1
+Symbol: stack_overflow_handler (crt.ecb_o) = 2EC7
+Symbol: string_literals_end (hello.o) = 2EC3
+Symbol: string_literals_start (hello.o) = 2EBD
+Symbol: sub32 (sub32.ecb_o) = 2889
+Symbol: sub32xu (sub32xu.ecb_o) = 28AA
+Symbol: unpackSingleAndConvertToASCII (unpackSingleAndConvertToASCII.ecb_o) = 2E55
+Symbol: unpackSingleAndConvertToASCII_dummy (crt.ecb_o) = 2855
+Symbol: unpackSingleAndConvertToASCII_hook (crt.ecb_o) = 2ECF

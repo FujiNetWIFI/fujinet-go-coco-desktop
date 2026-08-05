@@ -243,6 +243,7 @@ add_library(cocosession STATIC
   debugger/m6809dasm.c
   debugger/cocovideo.c
   debugger/symtab.c
+  debugger/csrcinfo.c
   "${COCO_ROMS_C}"
 )
 
@@ -298,6 +299,15 @@ add_executable(symtab_test tests/symtab_test.c)
 target_link_libraries(symtab_test cocosession)
 target_include_directories(symtab_test PRIVATE debugger)
 
+add_executable(csrcinfo_test tests/csrcinfo_test.c)
+target_link_libraries(csrcinfo_test cocosession)
+target_include_directories(csrcinfo_test PRIVATE debugger)
+# Fixture .lst/.map came from a real `cmoc -i --decb` build, not hand-written
+# (see core/tests/data) -- pointed at by absolute path so the test runs the
+# same regardless of ctest's working directory.
+target_compile_definitions(csrcinfo_test PRIVATE
+  CSRCINFO_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+
 add_executable(session_test tests/session_test.c)
 target_link_libraries(session_test cocosession)
 
@@ -321,6 +331,7 @@ add_test(NAME input COMMAND input_test)
 add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME symtab COMMAND symtab_test)
+add_test(NAME csrcinfo COMMAND csrcinfo_test)
 add_test(NAME debug COMMAND debug_test)
 add_test(NAME cpu_switch COMMAND cpu_switch_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)

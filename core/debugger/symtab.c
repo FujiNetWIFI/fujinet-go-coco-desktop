@@ -157,6 +157,13 @@ static int parse_line(const char *line, char *name_out, uint16_t *addr_out)
     return 1;
 }
 
+int cocosymtab_add(cocosymtab *t, uint16_t addr, const char *name)
+{
+    if (!t || !name)
+        return 0;
+    return append(t, addr, name);
+}
+
 int cocosymtab_load(cocosymtab *t, const char *path)
 {
     FILE *f = fopen(path, "r");

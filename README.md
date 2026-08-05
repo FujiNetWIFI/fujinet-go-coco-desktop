@@ -60,6 +60,16 @@ LWASM's `--symbol-dump` format, plus a small built-in table of Color BASIC
 ROM entry points (`POLCAT`, `CHROUT`, `CSRDON`, …). Available in every
 frontend — GTK, Qt, AppKit and Win32 — over the one shared engine.
 
+C source-level stepping for programs built with
+[CMOC](http://sarrazip.com/dev/cmoc.html): a source pane with the current
+line marked, step/step-over by C statement, breakpoints set by clicking a
+line, and a Locals pane showing parameters and locals by name and value.
+Load it with the "Load C Source…" button, pointing at the `.lst` listing —
+its sibling `.map` and every source file it names are found automatically.
+Requires compiling with `cmoc -i` (`--intermediate`), which is the flag that
+keeps the listing and linker map around; without it CMOC deletes both once
+the binary is linked. Available in every frontend.
+
 ## Building
 
 ```sh

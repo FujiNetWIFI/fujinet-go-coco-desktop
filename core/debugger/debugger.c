@@ -34,9 +34,17 @@
 #include "coco_host.h"
 #include "cocodebug.h"
 #include "compat.h"
+#include "csrcinfo.h"
 #include "m6809dasm.h"
 #include "session_internal.h"
 #include "symtab.h"
+
+/* Bound on instructions run during a C-line step before giving up. Covers
+ * stepping onto a line whose statement calls into code with no debug info
+ * (a ROM routine, a hand-written .s helper) and never returns to a mapped
+ * address on its own -- generous enough to survive a real printf() many
+ * times over, but not so large that a genuine runaway hangs the UI. */
+#define SRC_STEP_BUDGET 200000
 
 struct cocodebug {
     cocosession *s;
@@ -54,6 +62,15 @@ struct cocodebug {
     /* A one-shot breakpoint for step-over / step-out, or -1. */
     long transient_bp;
 
+    /* C-line stepping: 0 off, 1 step-into, 2 step-over. Checked in the hook
+     * alongside step_remaining/transient_bp above, and mutually exclusive
+     * with them -- entering one clears the others. */
+    int      src_step;
+    int      src_step_file, src_step_line;
+    uint16_t src_step_s;       /* S when the step began, for step-over's
+                                 * call-depth check. */
+    long     src_step_budget;  /* counts down; 0 gives up and stops anyway. */
+
     uint16_t bp[COCODEBUG_MAX_BREAKPOINTS];
     int nbp;
 
@@ -69,6 +86,11 @@ struct cocodebug {
     /* Name<->address table for annotating the disassembly view. Not tied to
      * pause state or the machine, so it needs none of the locking above. */
     cocosymtab *symtab;
+
+    /* C line/variable info from a CMOC build (see csrcinfo.h). Unlike
+     * symtab, this IS read from the hook while a C-line step is in flight,
+     * so swapping it (cocodebug_source_load/_clear) takes mtx. */
+    cocosrcinfo *srcinfo;
 };
 
 /* ---- reaching the machine ----------------------------------------------
@@ -132,11 +154,35 @@ static void instruction_hook(void *sptr)
         if (--d->step_remaining == 0)
             stop = 1;
     }
+    if (d->src_step && cocosrcinfo_is_stmt(d->srcinfo, pc)) {
+        int f, l;
+        cocosrcinfo_line_at(d->srcinfo, pc, &f, &l);
+        /* Step-over ignores anything deeper than where it started: S grows
+         * downward on the 6809, so a called routine's frame sits below the
+         * caller's, and at a statement boundary the callee's own frame is
+         * always already set up -- that is what makes this comparison
+         * stable within a function rather than just at entry. Step-into
+         * skips the check entirely, since any new statement is the goal. */
+        if ((f != d->src_step_file || l != d->src_step_line) &&
+            (d->src_step == 1 || cpu->reg_s >= d->src_step_s)) {
+            d->src_step = 0;
+            stop = 1;
+        }
+    }
+    if (d->src_step && --d->src_step_budget <= 0) {
+        /* Ran on for SRC_STEP_BUDGET instructions without reaching a new
+         * mapped statement -- most likely a call into code with no line
+         * info that never returns to a mapped address on its own. Stop
+         * where we are rather than hang. */
+        d->src_step = 0;
+        stop = 1;
+    }
     if (breakpoint_hit_locked(d, pc)) {
         /* A one-shot breakpoint is spent whether or not it is what stopped
          * us, so step-over cannot leave one behind to fire later. */
         d->transient_bp = -1;
         d->step_remaining = 0;
+        d->src_step = 0;
         stop = 1;
     }
 
@@ -169,6 +215,7 @@ cocodebug *cocodebug_create(cocosession *s)
     pthread_mutex_init(&d->mtx, NULL);
     coco_cond_init_monotonic(&d->cv);
     d->symtab = cocosymtab_create();
+    d->srcinfo = cocosrcinfo_create();
     return d;
 }
 
@@ -177,6 +224,7 @@ void cocodebug_destroy(cocodebug *d)
     if (!d)
         return;
     cocosymtab_destroy(d->symtab);
+    cocosrcinfo_destroy(d->srcinfo);
     pthread_mutex_destroy(&d->mtx);
     pthread_cond_destroy(&d->cv);
     free(d);
@@ -283,6 +331,7 @@ void cocodebug_pause(cocodebug *d)
     pthread_mutex_lock(&d->mtx);
     d->pause_request = 1;
     d->step_remaining = 0;
+    d->src_step = 0;
     pthread_mutex_unlock(&d->mtx);
 }
 
@@ -294,6 +343,7 @@ void cocodebug_resume(cocodebug *d)
     d->pause_request = 0;
     d->step_remaining = 0;
     d->transient_bp = -1;
+    d->src_step = 0;
     d->paused = 0;
     pthread_cond_broadcast(&d->cv);
     pthread_mutex_unlock(&d->mtx);
@@ -311,9 +361,61 @@ void cocodebug_step(cocodebug *d)
     pthread_mutex_lock(&d->mtx);
     d->step_remaining = 1;
     d->transient_bp = -1;
+    d->src_step = 0;
     d->paused = 0;
     pthread_cond_broadcast(&d->cv);
     pthread_mutex_unlock(&d->mtx);
+}
+
+/* Common tail for cocodebug_step_line / cocodebug_step_over_line: install the
+ * (file, line) the step should escape, arm the hook, and let the emulator
+ * thread go. Caller holds nothing; this takes d->mtx itself. */
+static void arm_src_step(cocodebug *d, int kind, int file, int line,
+                         uint16_t s_at_start)
+{
+    pthread_mutex_lock(&d->mtx);
+    d->src_step = kind;
+    d->src_step_file = file;
+    d->src_step_line = line;
+    d->src_step_s = s_at_start;
+    d->src_step_budget = SRC_STEP_BUDGET;
+    d->step_remaining = 0;
+    d->transient_bp = -1;
+    d->paused = 0;
+    pthread_cond_broadcast(&d->cv);
+    pthread_mutex_unlock(&d->mtx);
+}
+
+void cocodebug_step_line(cocodebug *d)
+{
+    int file, line;
+
+    if (!d)
+        return;
+    /* Falls back to a plain instruction step when there is nothing to
+     * target: no source info loaded, or PC is not itself a mapped statement
+     * (mid-prologue, or an address optimized out of the line table) -- in
+     * either case there is no (file, line) to compare against. */
+    if (!d->paused || cocosrcinfo_empty(d->srcinfo) ||
+        !cocosrcinfo_line_at(d->srcinfo, d->regs.pc, &file, &line)) {
+        cocodebug_step(d);
+        return;
+    }
+    arm_src_step(d, 1, file, line, 0);
+}
+
+void cocodebug_step_over_line(cocodebug *d)
+{
+    int file, line;
+
+    if (!d)
+        return;
+    if (!d->paused || cocosrcinfo_empty(d->srcinfo) ||
+        !cocosrcinfo_line_at(d->srcinfo, d->regs.pc, &file, &line)) {
+        cocodebug_step_over(d);
+        return;
+    }
+    arm_src_step(d, 2, file, line, d->regs.s);
 }
 
 uint64_t cocodebug_stop_serial(const cocodebug *d)
@@ -518,5 +620,128 @@ int cocodebug_breakpoint_list(cocodebug *d, uint16_t *out, int max)
     /* Toggling removes by swapping with the last entry, so the table is not
      * ordered; a UI listing them wants it to be. */
     qsort(out, (size_t)n, sizeof(uint16_t), cmp_u16);
+    return n;
+}
+
+/* ---- C source info (from a CMOC build) ----------------------------------- */
+
+int cocodebug_source_load(cocodebug *d, const char *lst_path)
+{
+    int n;
+    if (!d)
+        return -1;
+    /* Takes mtx because, unlike symtab, this table IS read from the hook
+     * while a C-line step is in flight (see instruction_hook). Safe to call
+     * while running -- the hook will simply block for the duration of the
+     * file read, the same brief stall an emulator instruction takes on any
+     * other contended lock -- but callers should still prefer to do this
+     * while paused, since a step in flight is aimed at the table being
+     * replaced out from under it. */
+    pthread_mutex_lock(&d->mtx);
+    n = cocosrcinfo_load(d->srcinfo, lst_path, d->symtab);
+    d->src_step = 0;
+    pthread_mutex_unlock(&d->mtx);
+    return n;
+}
+
+void cocodebug_source_clear(cocodebug *d)
+{
+    if (!d)
+        return;
+    pthread_mutex_lock(&d->mtx);
+    cocosrcinfo_clear(d->srcinfo);
+    d->src_step = 0;
+    pthread_mutex_unlock(&d->mtx);
+}
+
+int cocodebug_source_available(const cocodebug *d)
+{
+    return d && !cocosrcinfo_empty(d->srcinfo);
+}
+
+int cocodebug_source_line_at(cocodebug *d, uint16_t addr, int *file_id_out,
+                             int *line_out)
+{
+    return d ? cocosrcinfo_line_at(d->srcinfo, addr, file_id_out, line_out) : 0;
+}
+
+int cocodebug_source_file_count(cocodebug *d)
+{
+    return d ? cocosrcinfo_file_count(d->srcinfo) : 0;
+}
+
+const char *cocodebug_source_file_path(cocodebug *d, int file_id)
+{
+    return d ? cocosrcinfo_file_path(d->srcinfo, file_id) : NULL;
+}
+
+int cocodebug_source_breakpoint_toggle(cocodebug *d, int file_id, int line)
+{
+    uint16_t addr;
+    if (!d)
+        return -1;
+    if (!cocosrcinfo_addr_for_line(d->srcinfo, file_id, line, &addr))
+        return -2;
+    return cocodebug_breakpoint_toggle(d, addr);
+}
+
+int cocodebug_source_breakpoint_is_set(cocodebug *d, int file_id, int line)
+{
+    uint16_t addr;
+    if (!d)
+        return 0;
+    if (!cocosrcinfo_addr_for_line(d->srcinfo, file_id, line, &addr))
+        return 0;
+    return cocodebug_breakpoint_is_set(d, addr);
+}
+
+int cocodebug_locals_get(cocodebug *d, cocodebug_local *out, int max)
+{
+    const cocosrc_func *f;
+    const cocosrc_var *vars;
+    cocodebug_regs regs;
+    int nv, n, i;
+
+    if (!d || !out || max <= 0)
+        return 0;
+    /* A consistent snapshot of PC and U, the same way any other inspection
+     * call sees the paused machine's state. */
+    if (!cocodebug_regs_get(d, &regs))
+        return 0;
+
+    f = cocosrcinfo_func_at(d->srcinfo, regs.pc);
+    /* Before body_start, U is still whichever frame the caller left it in
+     * (see cocosrc_func's comment in csrcinfo.h): reporting locals there
+     * would show someone else's stack under this function's variable
+     * names. */
+    if (!f || regs.pc < f->body_start)
+        return 0;
+
+    vars = cocosrcinfo_func_vars(d->srcinfo, f, &nv);
+    n = nv < max ? nv : max;
+    for (i = 0; i < n; i++) {
+        uint16_t addr = (uint16_t)(regs.u + vars[i].frame_off);
+        int sz = vars[i].size;
+        uint8_t buf[4];
+
+        snprintf(out[i].name, sizeof(out[i].name), "%s", vars[i].name);
+        snprintf(out[i].type, sizeof(out[i].type), "%s", vars[i].type);
+        out[i].frame_off = vars[i].frame_off;
+        out[i].size = vars[i].size;
+        out[i].is_param = vars[i].is_param;
+        out[i].value = 0;
+        out[i].has_value = 0;
+
+        if (sz >= 1 && sz <= 4 && cocodebug_read(d, addr, buf, sz) == sz) {
+            uint32_t v = 0;
+            int b;
+            /* The 6809 is big-endian, so the first byte read is the most
+             * significant -- the natural order to fold into a uint32_t. */
+            for (b = 0; b < sz; b++)
+                v = (v << 8) | buf[b];
+            out[i].value = v;
+            out[i].has_value = 1;
+        }
+    }
     return n;
 }

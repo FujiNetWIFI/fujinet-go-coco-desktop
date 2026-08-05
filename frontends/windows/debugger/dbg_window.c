@@ -47,6 +47,7 @@
 #define DISASM_LINES 40
 #define MEM_ROWS 16
 #define MEM_COLS 16
+#define LOCALS_MAX 32
 
 #define WM_DBG_ACCEPT (WM_APP + 1) /* wp: control id -- Enter in an edit */
 #define TIMER_REFRESH 1
@@ -54,6 +55,8 @@
 enum {
     IDC_RUN = 1000, IDC_STEP, IDC_STEP_OVER, IDC_STEP_OUT, IDC_CLEAR_BP,
     IDC_LOAD_SYM, IDC_CLEAR_SYM, IDC_STATUS,
+    IDC_STEP_LINE, IDC_STEP_OVER_LINE, IDC_LOAD_SRC, IDC_CLEAR_SRC,
+    IDC_SRC_COMBO, IDC_SRC_VIEW, IDC_LOCALS,
     IDC_DISASM, IDC_REGS, IDC_VIDEO,
     IDC_MEM_ADDR, IDC_MEM_GO, IDC_MEM_VIEW,
 };
@@ -67,6 +70,8 @@ typedef struct {
     HWND hwnd;
     HWND run_btn, step_btn, step_over_btn, step_out_btn, clear_bp_btn;
     HWND load_sym_btn, clear_sym_btn, status;
+    HWND step_line_btn, step_over_line_btn, load_src_btn, clear_src_btn;
+    HWND src_combo, src_view, locals;
     HWND disasm, regs, video;
     HWND mem_addr, mem_go, mem_view;
 
@@ -79,6 +84,22 @@ typedef struct {
     uint16_t mem_base;
     uint64_t seen_serial;
     int was_paused;
+
+    /* The source pane's own cache: whichever file's text is currently held
+     * in src_cached_lines, so a stop that doesn't change the displayed file
+     * doesn't re-read it from disk. src_cached_buf holds the raw bytes (with
+     * '\n's turned into NULs); src_cached_lines points into it, one entry
+     * per line. */
+    char src_cached_path[MAX_PATH];
+    char *src_cached_buf;
+    char **src_cached_lines;
+    int src_cached_nlines;
+    int src_displayed_file_id;
+    /* Where PC actually is, independent of which file the combo is showing
+     * (a user may be browsing a different file to set a breakpoint ahead of
+     * time): the '>' marker only appears when these match the displayed
+     * file. */
+    int pc_file_id, pc_line;
 
     uint32_t *video_buf; /* COCOVIDEO_MAX_WIDTH * MAX_HEIGHT, heap */
     pixel_view video_view;
@@ -201,6 +222,191 @@ static void refresh_regs(debugger *d)
     set_text(d->regs, buf);
 }
 
+static void refresh_locals(debugger *d)
+{
+    cocodebug_local locals[LOCALS_MAX];
+    char text[LOCALS_MAX * 96];
+    size_t len = 0;
+    int n, i;
+
+    if (!cocodebug_source_available(d->dbg)) {
+        set_text(d->locals, "");
+        return;
+    }
+    n = cocodebug_locals_get(d->dbg, locals, LOCALS_MAX);
+    text[0] = '\0';
+    if (n == 0) {
+        /* Not necessarily an error: PC may just be before the function's
+         * first statement (mid-prologue), where there is nothing correct to
+         * show yet. */
+        set_text(d->locals, "(no locals in scope)");
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        const cocodebug_local *v = &locals[i];
+        if (v->has_value)
+            len += (size_t)snprintf(text + len, sizeof(text) - len,
+                                    "%-12s %-10s %s= %u ($%X)\r\n", v->name,
+                                    v->type, v->is_param ? "(param) " : "",
+                                    v->value, v->value);
+        else
+            len += (size_t)snprintf(text + len, sizeof(text) - len,
+                                    "%-12s %-10s %s= ?\r\n", v->name, v->type,
+                                    v->is_param ? "(param) " : "");
+    }
+    set_text(d->locals, text);
+}
+
+/* Loads (and caches) file_id's text, splitting it in place the way
+ * g_strsplit does (GNOME's dbg_window.c): '\n' -> '\0', one pointer per
+ * line. A trailing '\r' left by CRLF endings is trimmed too. */
+static void load_src_file_cache(debugger *d, int file_id)
+{
+    const char *path = cocodebug_source_file_path(d->dbg, file_id);
+    FILE *f;
+    long sz;
+    int i, nlines;
+    char *p;
+
+    if (path && strncmp(path, d->src_cached_path, sizeof(d->src_cached_path)) == 0)
+        return; /* already cached */
+
+    free(d->src_cached_buf);
+    free(d->src_cached_lines);
+    d->src_cached_buf = NULL;
+    d->src_cached_lines = NULL;
+    d->src_cached_nlines = 0;
+    d->src_cached_path[0] = '\0';
+    if (!path)
+        return;
+
+    f = fopen(path, "rb");
+    if (!f)
+        return;
+    fseek(f, 0, SEEK_END);
+    sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) {
+        fclose(f);
+        return;
+    }
+
+    d->src_cached_buf = (char *)malloc((size_t)sz + 1);
+    if (!d->src_cached_buf) {
+        fclose(f);
+        return;
+    }
+    fread(d->src_cached_buf, 1, (size_t)sz, f);
+    d->src_cached_buf[sz] = '\0';
+    fclose(f);
+
+    nlines = 1;
+    for (p = d->src_cached_buf; *p; p++)
+        if (*p == '\n')
+            nlines++;
+    d->src_cached_lines = (char **)malloc(sizeof(char *) * (size_t)nlines);
+    if (!d->src_cached_lines) {
+        free(d->src_cached_buf);
+        d->src_cached_buf = NULL;
+        return;
+    }
+    d->src_cached_lines[0] = d->src_cached_buf;
+    d->src_cached_nlines = 1;
+    for (p = d->src_cached_buf; *p; p++) {
+        if (*p == '\n') {
+            *p = '\0';
+            d->src_cached_lines[d->src_cached_nlines++] = p + 1;
+        }
+    }
+    for (i = 0; i < d->src_cached_nlines; i++) {
+        size_t len = strlen(d->src_cached_lines[i]);
+        if (len > 0 && d->src_cached_lines[i][len - 1] == '\r')
+            d->src_cached_lines[i][len - 1] = '\0';
+    }
+    strncpy(d->src_cached_path, path, sizeof(d->src_cached_path) - 1);
+    d->src_cached_path[sizeof(d->src_cached_path) - 1] = '\0';
+}
+
+/* Redraws the source list with '>' on the line PC is at (if PC's file is the
+ * one showing) and '*' on any line carrying a breakpoint. Re-reading the
+ * file (inside load_src_file_cache, which no-ops when already cached) is
+ * cheap enough here since this only runs on an actual stop or a manual file
+ * switch, never on every WM_TIMER tick -- see dbg_proc's early-out. */
+static void populate_src_list(debugger *d, int file_id)
+{
+    char *text;
+    size_t cap, len = 0;
+    int i;
+
+    load_src_file_cache(d, file_id);
+    d->src_displayed_file_id = file_id;
+
+    if (!d->src_cached_lines) {
+        set_text(d->src_view, "");
+        return;
+    }
+
+    cap = (size_t)d->src_cached_nlines * 140 + 4096;
+    text = (char *)malloc(cap);
+    if (!text)
+        return;
+    text[0] = '\0';
+
+    for (i = 0; i < d->src_cached_nlines; i++) {
+        int lineno = i + 1;
+        int is_pc = (file_id == d->pc_file_id && lineno == d->pc_line);
+        int has_bp = cocodebug_source_breakpoint_is_set(d->dbg, file_id, lineno);
+
+        if (len + 300 >= cap) {
+            /* The estimate above was short (an unusually long line) --
+             * grow rather than truncate silently. */
+            char *grown;
+            cap *= 2;
+            grown = (char *)realloc(text, cap);
+            if (!grown)
+                break;
+            text = grown;
+        }
+        len += (size_t)snprintf(text + len, cap - len, "%c%c %5d  %s\r\n",
+                                is_pc ? '>' : ' ', has_bp ? '*' : ' ', lineno,
+                                d->src_cached_lines[i]);
+    }
+    set_text(d->src_view, text);
+    free(text);
+}
+
+/* Follows PC's file automatically. If PC is not itself a mapped statement
+ * (mid-prologue, or code with no line info), keeps showing whatever file
+ * was last selected and just drops the '>' marker rather than guess. */
+static void refresh_source(debugger *d)
+{
+    cocodebug_regs r;
+    int fid, line;
+
+    if (!cocodebug_source_available(d->dbg)) {
+        set_text(d->src_view, "");
+        return;
+    }
+    if (!cocodebug_regs_get(d->dbg, &r))
+        return;
+
+    if (cocodebug_source_line_at(d->dbg, r.pc, &fid, &line)) {
+        d->pc_file_id = fid;
+        d->pc_line = line;
+        if ((int)SendMessageA(d->src_combo, CB_GETCURSEL, 0, 0) != fid) {
+            SendMessageA(d->src_combo, CB_SETCURSEL, (WPARAM)fid, 0);
+            populate_src_list(d, fid);
+        } else {
+            populate_src_list(d, d->src_displayed_file_id);
+        }
+    } else {
+        d->pc_file_id = -1;
+        d->pc_line = -1;
+        if (SendMessageA(d->src_combo, CB_GETCOUNT, 0, 0) > 0)
+            populate_src_list(d, d->src_displayed_file_id);
+    }
+}
+
 static void refresh_mem(debugger *d)
 {
     uint8_t data[MEM_ROWS * MEM_COLS];
@@ -256,6 +462,8 @@ static void clear_views(debugger *d)
 {
     set_text(d->disasm, "");
     set_text(d->regs, "");
+    set_text(d->locals, "");
+    set_text(d->src_view, "");
     set_text(d->mem_view, "");
     d->video_view.pixels = NULL;
     InvalidateRect(d->video, NULL, FALSE);
@@ -265,9 +473,13 @@ static void refresh_all(debugger *d, int paused)
 {
     set_text(d->run_btn, paused ? "Run" : "Pause");
     set_text(d->status, paused ? "Paused" : "Running");
+    EnableWindow(d->step_line_btn, cocodebug_source_available(d->dbg));
+    EnableWindow(d->step_over_line_btn, cocodebug_source_available(d->dbg));
     if (paused) {
         refresh_disasm(d);
         refresh_regs(d);
+        refresh_source(d);
+        refresh_locals(d);
         refresh_mem(d);
         refresh_video(d);
     } else {
@@ -306,6 +518,72 @@ static void load_symbols(debugger *d)
         set_text(d->status, "Could not open symbol file");
     if (cocodebug_is_paused(d->dbg))
         refresh_disasm(d); /* redraw with the new labels */
+}
+
+/* Rebuilds the file picker from cocodebug_source_file_count()/_file_path().
+ * Selection index and file_id are the same number: files are appended here
+ * in exactly the id order the engine hands them out (0..count-1). */
+static void rebuild_src_combo(debugger *d)
+{
+    int n = cocodebug_source_file_count(d->dbg);
+    int i;
+
+    SendMessageA(d->src_combo, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < n; i++) {
+        const char *path = cocodebug_source_file_path(d->dbg, i);
+        const char *base = path ? strrchr(path, '\\') : NULL;
+        if (!base && path)
+            base = strrchr(path, '/');
+        SendMessageA(d->src_combo, CB_ADDSTRING, 0,
+                    (LPARAM)(base ? base + 1 : (path ? path : "")));
+    }
+    EnableWindow(d->src_combo, n > 0);
+    if (n > 0) {
+        SendMessageA(d->src_combo, CB_SETCURSEL, 0, 0);
+        populate_src_list(d, 0);
+    } else {
+        set_text(d->src_view, "");
+    }
+}
+
+static void load_source(debugger *d)
+{
+    OPENFILENAMEA ofn;
+    char path[MAX_PATH] = "";
+
+    memset(&ofn, 0, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = d->hwnd;
+    ofn.lpstrFilter = "CMOC listings (*.lst)\0*.lst\0All files\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = sizeof(path);
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameA(&ofn))
+        return;
+
+    if (cocodebug_source_load(d->dbg, path) < 0) {
+        set_text(d->status,
+                "Could not open listing or its .map (both need `cmoc -i`)");
+        return;
+    }
+    d->src_cached_path[0] = '\0'; /* the file list may have changed */
+    rebuild_src_combo(d);
+}
+
+static void clear_source(debugger *d)
+{
+    cocodebug_source_clear(d->dbg);
+    free(d->src_cached_buf);
+    free(d->src_cached_lines);
+    d->src_cached_buf = NULL;
+    d->src_cached_lines = NULL;
+    d->src_cached_nlines = 0;
+    d->src_cached_path[0] = '\0';
+    d->pc_file_id = -1;
+    d->src_displayed_file_id = -1;
+    SendMessageA(d->src_combo, CB_RESETCONTENT, 0, 0);
+    EnableWindow(d->src_combo, FALSE);
+    set_text(d->src_view, "");
 }
 
 static void on_accept(debugger *d, int id)
@@ -406,6 +684,28 @@ static LRESULT CALLBACK disasm_subclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     return CallWindowProcA(g_disasm_proc, hwnd, msg, wp, lp);
 }
 
+static WNDPROC g_src_proc;
+
+/* Unlike disasm_subclass, no text parsing is needed to recover which line
+ * was clicked: the source view has exactly one physical line per source
+ * line (WS_HSCROLL disables word-wrap, same as the other mono views), so
+ * the display row EM_CHARFROMPOS reports is the 0-based line index
+ * directly. */
+static LRESULT CALLBACK src_subclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_LBUTTONDOWN && g_dbg && cocodebug_is_paused(g_dbg->dbg)) {
+        LRESULT pos = SendMessageA(hwnd, EM_CHARFROMPOS, 0, lp);
+        int line_idx = HIWORD(pos);
+        if (line_idx >= 0 && line_idx < g_dbg->src_cached_nlines) {
+            cocodebug_source_breakpoint_toggle(g_dbg->dbg,
+                                               g_dbg->src_displayed_file_id,
+                                               line_idx + 1);
+            populate_src_list(g_dbg, g_dbg->src_displayed_file_id);
+        }
+    }
+    return CallWindowProcA(g_src_proc, hwnd, msg, wp, lp);
+}
+
 /* ---- construction ------------------------------------------------------------ */
 
 static HWND child(debugger *d, const char *cls, const char *text, DWORD style,
@@ -443,18 +743,37 @@ static void build_controls(debugger *d)
                              IDC_STEP_OVER);
     d->step_out_btn = child(d, "BUTTON", "Step Out (Shift+F8)", BS_PUSHBUTTON,
                             IDC_STEP_OUT);
+    d->step_line_btn = child(d, "BUTTON", "Step Line (F6)", BS_PUSHBUTTON,
+                             IDC_STEP_LINE);
+    d->step_over_line_btn = child(d, "BUTTON", "Step Over Line (Shift+F6)",
+                                  BS_PUSHBUTTON, IDC_STEP_OVER_LINE);
     d->clear_bp_btn = child(d, "BUTTON", "Clear Breakpoints", BS_PUSHBUTTON,
                             IDC_CLEAR_BP);
     d->load_sym_btn = child(d, "BUTTON", "Load Symbols...", BS_PUSHBUTTON,
                             IDC_LOAD_SYM);
     d->clear_sym_btn = child(d, "BUTTON", "Clear Symbols", BS_PUSHBUTTON,
                              IDC_CLEAR_SYM);
+    d->load_src_btn = child(d, "BUTTON", "Load C Source...", BS_PUSHBUTTON,
+                            IDC_LOAD_SRC);
+    d->clear_src_btn = child(d, "BUTTON", "Clear C Source", BS_PUSHBUTTON,
+                             IDC_CLEAR_SRC);
     d->status = child(d, "STATIC", "Running", SS_LEFT, IDC_STATUS);
 
     d->disasm = mono_view(d, IDC_DISASM);
     g_disasm_proc = (WNDPROC)SetWindowLongPtrA(d->disasm, GWLP_WNDPROC,
                                                (LONG_PTR)disasm_subclass);
+
+    /* CBS_DROPDOWNLIST: a plain read-only picker, matching KDE/GNOME's file
+     * combo -- no free text entry. Disabled until a listing is loaded. */
+    d->src_combo = child(d, "COMBOBOX", "",
+                         CBS_DROPDOWNLIST | WS_VSCROLL, IDC_SRC_COMBO);
+    EnableWindow(d->src_combo, FALSE);
+    d->src_view = mono_view(d, IDC_SRC_VIEW);
+    g_src_proc = (WNDPROC)SetWindowLongPtrA(d->src_view, GWLP_WNDPROC,
+                                            (LONG_PTR)src_subclass);
+
     d->regs = mono_view(d, IDC_REGS);
+    d->locals = mono_view(d, IDC_LOCALS);
     d->video = child(d, "CocoDbgPixels", "", 0, IDC_VIDEO);
     SetWindowLongPtrA(d->video, GWLP_USERDATA, (LONG_PTR)&d->video_view);
 
@@ -467,35 +786,48 @@ static void layout(debugger *d)
 {
     RECT client;
     int y = 8, bx = 8;
-    int top_h, mid_top, mid_h, left_w, right_x, right_w;
+    int top_h, mid_top, mid_h, left_w, src_w, right_x1, right_x2, right_w;
     int mem_row_y;
 
     GetClientRect(d->hwnd, &client);
 
-    MoveWindow(d->run_btn, bx, y, 110, 26, TRUE);        bx += 116;
-    MoveWindow(d->step_btn, bx, y, 100, 26, TRUE);       bx += 106;
-    MoveWindow(d->step_over_btn, bx, y, 130, 26, TRUE);  bx += 136;
-    MoveWindow(d->step_out_btn, bx, y, 150, 26, TRUE);   bx += 156;
-    MoveWindow(d->clear_bp_btn, bx, y, 140, 26, TRUE);   bx += 146;
-    MoveWindow(d->load_sym_btn, bx, y, 120, 26, TRUE);   bx += 126;
-    MoveWindow(d->clear_sym_btn, bx, y, 110, 26, TRUE);  bx += 116;
+    MoveWindow(d->run_btn, bx, y, 110, 26, TRUE);            bx += 116;
+    MoveWindow(d->step_btn, bx, y, 100, 26, TRUE);           bx += 106;
+    MoveWindow(d->step_over_btn, bx, y, 130, 26, TRUE);      bx += 136;
+    MoveWindow(d->step_out_btn, bx, y, 150, 26, TRUE);       bx += 156;
+    MoveWindow(d->step_line_btn, bx, y, 130, 26, TRUE);      bx += 136;
+    MoveWindow(d->step_over_line_btn, bx, y, 190, 26, TRUE); bx += 196;
+    MoveWindow(d->clear_bp_btn, bx, y, 140, 26, TRUE);       bx += 146;
+    MoveWindow(d->load_sym_btn, bx, y, 120, 26, TRUE);       bx += 126;
+    MoveWindow(d->clear_sym_btn, bx, y, 110, 26, TRUE);      bx += 116;
+    MoveWindow(d->load_src_btn, bx, y, 140, 26, TRUE);       bx += 146;
+    MoveWindow(d->clear_src_btn, bx, y, 120, 26, TRUE);      bx += 126;
     MoveWindow(d->status, bx, y + 5, client.right - bx - 8, 20, TRUE);
     top_h = y + 26 + 10;
 
-    /* Middle area: disassembly on the left, registers + video stacked on
-     * the right. */
+    /* Middle area, three columns: disassembly, C source (file picker over a
+     * listing), then registers + locals + video stacked. */
     mid_top = top_h;
     mem_row_y = client.bottom - 8 - 22 - 4 - 160; /* address row + mem view */
     mid_h = mem_row_y - mid_top - 8;
     if (mid_h < 100) mid_h = 100;
 
-    left_w = (client.right - 16) * 55 / 100;
+    left_w = (client.right - 24) * 35 / 100;
+    src_w = (client.right - 24) * 30 / 100;
     MoveWindow(d->disasm, 8, mid_top, left_w, mid_h, TRUE);
 
-    right_x = 8 + left_w + 8;
-    right_w = client.right - right_x - 8;
-    MoveWindow(d->regs, right_x, mid_top, right_w, 130, TRUE);
-    MoveWindow(d->video, right_x, mid_top + 138, right_w, mid_h - 138, TRUE);
+    right_x1 = 8 + left_w + 8;
+    /* The combo's own height parameter sets how tall its dropdown list can
+     * open, not the closed box (the system sizes that from the font) -- 200
+     * is just "tall enough to show several files without scrolling". */
+    MoveWindow(d->src_combo, right_x1, mid_top, src_w, 200, TRUE);
+    MoveWindow(d->src_view, right_x1, mid_top + 28, src_w, mid_h - 28, TRUE);
+
+    right_x2 = right_x1 + src_w + 8;
+    right_w = client.right - right_x2 - 8;
+    MoveWindow(d->regs, right_x2, mid_top, right_w, 130, TRUE);
+    MoveWindow(d->locals, right_x2, mid_top + 138, right_w, 110, TRUE);
+    MoveWindow(d->video, right_x2, mid_top + 256, right_w, mid_h - 256, TRUE);
 
     MoveWindow(d->mem_addr, 8, mem_row_y, 120, 22, TRUE);
     MoveWindow(d->mem_go, 134, mem_row_y, 60, 24, TRUE);
@@ -536,6 +868,8 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_STEP:       cocodebug_step(d->dbg); return 0;
         case IDC_STEP_OVER:  cocodebug_step_over(d->dbg); return 0;
         case IDC_STEP_OUT:   cocodebug_step_out(d->dbg); return 0;
+        case IDC_STEP_LINE:      cocodebug_step_line(d->dbg); return 0;
+        case IDC_STEP_OVER_LINE: cocodebug_step_over_line(d->dbg); return 0;
         case IDC_CLEAR_BP:
             cocodebug_breakpoint_clear_all(d->dbg);
             if (cocodebug_is_paused(d->dbg))
@@ -546,6 +880,15 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             cocodebug_symbols_clear(d->dbg);
             if (cocodebug_is_paused(d->dbg))
                 refresh_disasm(d);
+            return 0;
+        case IDC_LOAD_SRC:   load_source(d); return 0;
+        case IDC_CLEAR_SRC:  clear_source(d); return 0;
+        case IDC_SRC_COMBO:
+            if (HIWORD(wp) == CBN_SELCHANGE) {
+                int idx = (int)SendMessageA(d->src_combo, CB_GETCURSEL, 0, 0);
+                if (idx != CB_ERR)
+                    populate_src_list(d, idx);
+            }
             return 0;
         case IDC_MEM_GO:     on_accept(d, IDC_MEM_ADDR); return 0;
         default: break;
@@ -566,6 +909,8 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         KillTimer(hwnd, TIMER_REFRESH);
         DeleteObject(d->mono);
         free(d->video_buf);
+        free(d->src_cached_buf);
+        free(d->src_cached_lines);
         free(d);
         g_dbg = NULL;
         return 0;
@@ -581,7 +926,7 @@ void coco_debugger_show(HWND parent, cocosession *session)
     HINSTANCE inst;
     WNDCLASSA wc;
     debugger *d;
-    ACCEL accels[4];
+    ACCEL accels[6];
 
     if (g_dbg) {
         ShowWindow(g_dbg->hwnd, SW_SHOW);
@@ -629,11 +974,13 @@ void coco_debugger_show(HWND parent, cocosession *session)
         free(d);
         return;
     }
+    d->pc_file_id = -1;
+    d->src_displayed_file_id = -1;
     g_dbg = d;
 
     d->hwnd = CreateWindowExA(0, "CocoDebuggerWindow", "Debugger",
                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                              1180, 780, NULL, NULL, inst, NULL);
+                              1750, 860, NULL, NULL, inst, NULL);
     if (!d->hwnd) {
         free(d->video_buf);
         free(d);
@@ -648,8 +995,8 @@ void coco_debugger_show(HWND parent, cocosession *session)
 
     build_controls(d);
 
-    /* F5/F7/F8/Shift+F8 work wherever the focus is inside the window,
-     * matching the other frontends' shortcuts. */
+    /* F5/F6/F7/F8/Shift+F6/Shift+F8 work wherever the focus is inside the
+     * window, matching the other frontends' shortcuts. */
     accels[0].fVirt = FVIRTKEY;          accels[0].key = VK_F5;
     accels[0].cmd = IDC_RUN;
     accels[1].fVirt = FVIRTKEY;          accels[1].key = VK_F7;
@@ -658,7 +1005,11 @@ void coco_debugger_show(HWND parent, cocosession *session)
     accels[2].cmd = IDC_STEP_OVER;
     accels[3].fVirt = FVIRTKEY | FSHIFT; accels[3].key = VK_F8;
     accels[3].cmd = IDC_STEP_OUT;
-    d->accel = CreateAcceleratorTableA(accels, 4);
+    accels[4].fVirt = FVIRTKEY;          accels[4].key = VK_F6;
+    accels[4].cmd = IDC_STEP_LINE;
+    accels[5].fVirt = FVIRTKEY | FSHIFT; accels[5].key = VK_F6;
+    accels[5].cmd = IDC_STEP_OVER_LINE;
+    d->accel = CreateAcceleratorTableA(accels, 6);
 
     /* Engaging switches the emulator loop to the path that honours
      * breakpoints. Pausing immediately is what a user opening a debugger

@@ -134,6 +134,34 @@ int main(void)
     ok("...and no memory", cocodebug_read(d, 0xA000, buf, 4) == 0);
     ok("the debugger starts disengaged", !cocodebug_is_engaged(d));
 
+    /* --- no C source info loaded: every query is a safe miss, not a crash
+     * or garbage -- this is the state most sessions run in forever, since
+     * loading a .lst is opt-in and CoCo software is overwhelmingly not
+     * built from C. -------------------------------------------------------- */
+    {
+        cocodebug_local locals[8];
+        int fid, line;
+
+        ok("no source info is available yet", !cocodebug_source_available(d));
+        ok("line_at misses with nothing loaded",
+           !cocodebug_source_line_at(d, 0xA000, &fid, &line));
+        ok("file_count is 0", cocodebug_source_file_count(d) == 0);
+        ok("file_path is NULL for any id",
+           cocodebug_source_file_path(d, 0) == NULL);
+        ok("a source breakpoint can't resolve a line that doesn't exist",
+           cocodebug_source_breakpoint_toggle(d, 0, 1) == -2);
+        ok("...and isn't reported set either",
+           !cocodebug_source_breakpoint_is_set(d, 0, 1));
+        ok("locals_get returns none on a running machine",
+           cocodebug_locals_get(d, locals, 8) == 0);
+        /* Neither must crash on a running, source-less machine -- both fall
+         * back to a plain instruction step, which is itself a no-op here
+         * since the machine isn't even paused yet. */
+        cocodebug_step_line(d);
+        cocodebug_step_over_line(d);
+        ok("stepping by line without pausing first doesn't crash", 1);
+    }
+
     /* --- engage and pause ------------------------------------------------ */
     cocodebug_set_engaged(d, 1);
     ok("it engages", cocodebug_is_engaged(d));
@@ -186,6 +214,28 @@ int main(void)
             prev = r2.pc;
         }
         ok("eight more steps all advance", moved == 8);
+    }
+
+    /* --- still no source info loaded, but now paused: locals_get must stay
+     * a clean miss rather than reading garbage off the machine, and a
+     * line-step must fall back to a plain instruction step rather than do
+     * nothing. --------------------------------------------------------------- */
+    {
+        cocodebug_local locals[8];
+        uint16_t before;
+
+        ok("locals_get misses while paused with no source loaded",
+           cocodebug_locals_get(d, locals, 8) == 0);
+
+        ok("PC is known before a line-step fallback",
+           cocodebug_regs_get(d, &r));
+        before = r.pc;
+        serial = cocodebug_stop_serial(d);
+        cocodebug_step_line(d);
+        ok("step_line falls back to a real step and stops again",
+           wait_stop_serial(d, serial));
+        ok("...having actually advanced the PC",
+           cocodebug_regs_get(d, &r2) && r2.pc != before);
     }
 
     /* --- a breakpoint stops a running machine ---------------------------- */

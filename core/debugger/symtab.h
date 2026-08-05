@@ -29,6 +29,11 @@ void cocosymtab_destroy(cocosymtab *t);
  * number of symbols added, or -1 if the file could not be opened. */
 int cocosymtab_load(cocosymtab *t, const char *path);
 
+/* Adds one symbol directly, e.g. from a linker map file. Counts as a user
+ * symbol, so cocosymtab_clear_user() drops it too. Returns 1 on success, 0 on
+ * out-of-memory or a NULL table/name. */
+int cocosymtab_add(cocosymtab *t, uint16_t addr, const char *name);
+
 /* Drops everything cocosymtab_load added; the built-in table is untouched. */
 void cocosymtab_clear_user(cocosymtab *t);
 

@@ -119,6 +119,75 @@ void cocodebug_breakpoint_clear_all(cocodebug *d);
 /* Copies the set addresses into out (ascending); returns how many. */
 int cocodebug_breakpoint_list(cocodebug *d, uint16_t *out, int max);
 
+/* ---- C source info (from a CMOC build) ------------------------------------
+ * `cmoc -i` (--intermediate) keeps the assembler listing and linker map that
+ * together map machine addresses back to C source lines, function extents,
+ * and each function's parameters/locals (see core/debugger/csrcinfo.h for
+ * exactly what CMOC emits and how it is parsed). Everything below is
+ * available regardless of pause state, like the symbol table -- it is a
+ * static description of the program, not the running machine -- except
+ * cocodebug_locals_get, which reads live memory the same as
+ * cocodebug_read. */
+
+/* Parses lst_path and its sibling .map (same directory and basename,
+ * extension ".map") -- both only kept by `cmoc -i`. Function/data symbols
+ * the map resolves are also loaded into the symbol table, so the
+ * disassembly view picks up C names for free. Replaces anything already
+ * loaded. Best called while paused: a C-line step in flight targets the
+ * table being replaced, and is cancelled by this call either way. Returns
+ * the number of source lines with code on them, or -1 if the listing or its
+ * .map could not be read. */
+int cocodebug_source_load(cocodebug *d, const char *lst_path);
+/* Drops everything cocodebug_source_load loaded. */
+void cocodebug_source_clear(cocodebug *d);
+int cocodebug_source_available(const cocodebug *d);
+
+/* Exact-address lookup, e.g. to find which source line PC is on. Returns 1
+ * and fills *file_id_out and *line_out on a hit. */
+int cocodebug_source_line_at(cocodebug *d, uint16_t addr, int *file_id_out,
+                             int *line_out);
+int cocodebug_source_file_count(cocodebug *d);
+/* Full path, resolved against the listing's own directory at load time.
+ * Valid for the table's lifetime (until the next _source_load or
+ * _source_clear). NULL if file_id is out of range. */
+const char *cocodebug_source_file_path(cocodebug *d, int file_id);
+
+/* Resolves file_id:line to an address and toggles a normal breakpoint there
+ * -- source and disassembly breakpoints are the same table underneath.
+ * Same return convention as cocodebug_breakpoint_toggle, plus -2 when the
+ * line has no code (a blank line, a declaration with no initializer, one
+ * optimized away entirely). */
+int cocodebug_source_breakpoint_toggle(cocodebug *d, int file_id, int line);
+int cocodebug_source_breakpoint_is_set(cocodebug *d, int file_id, int line);
+
+/* Run until control reaches a different source line, in a different
+ * function or the same one. Falls back to cocodebug_step when there is no
+ * source info loaded, or PC is not itself a mapped statement (mid-prologue,
+ * or a line optimized away entirely). Only meaningful while paused. */
+void cocodebug_step_line(cocodebug *d);
+/* Like cocodebug_step_line, but a call on the current line is run to
+ * completion rather than stepped into -- the source-level equivalent of
+ * cocodebug_step_over. Falls back to cocodebug_step_over under the same
+ * conditions cocodebug_step_line falls back to cocodebug_step. */
+void cocodebug_step_over_line(cocodebug *d);
+
+typedef struct {
+    char     name[32];
+    char     type[32];  /* CMOC's own type string, verbatim */
+    int16_t  frame_off; /* signed displacement from U; >=0 is a parameter */
+    uint8_t  size;
+    int      is_param;
+    int      has_value; /* 0 when size is >4 bytes (not decoded) */
+    uint32_t value;      /* meaningful only when has_value is set */
+} cocodebug_local;
+
+/* The current function's parameters and locals, in declaration order, read
+ * at U + frame_off through the machine's own memory (like cocodebug_read).
+ * Returns 0 while running, when no source info is loaded, or when PC is
+ * before the function's first C statement -- U is still the caller's frame
+ * there, so there is nothing correct to report. */
+int cocodebug_locals_get(cocodebug *d, cocodebug_local *out, int max);
+
 #ifdef __cplusplus
 }
 #endif
