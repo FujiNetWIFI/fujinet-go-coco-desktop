@@ -44,6 +44,17 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.5" date="2026-08-29">
+      <description>
+        <p>
+          The bundled FujiNet runtime moves up to a firmware build with the
+          new calendar network protocols. A program running on the emulated
+          CoCo can open CALENDAR:, GCAL: and ICAL: URLs on the N: device and
+          read a Google Calendar or iCalendar feed straight off the network
+          device.
+        </p>
+      </description>
+    </release>
     <release version="0.2.4" date="2026-08-05">
       <description>
         <p>

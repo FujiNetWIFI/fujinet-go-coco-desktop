@@ -139,5 +139,5 @@ modules:
         dest: third_party/xroar
       - type: git
         url: https://github.com/FujiNetWIFI/fujinet-firmware
-        commit: b9a27cfa145134f5a7088535ac2721eb3cdf41be
+        commit: cd7c0eb9a543845a3b934bc52663eeedc4656f92
         dest: third_party/fujinet-firmware
