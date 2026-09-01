@@ -35,7 +35,7 @@ set(XROAR_VERSION "1.11")
 set(XROAR_URL "https://www.6809.org.uk/xroar/dl/xroar-${XROAR_VERSION}.tar.gz")
 set(XROAR_SHA256 "70270805ebd52c0b62237cc2f28b32b5c7df9764d10a7c7190de584cfc6e95af")
 
-set(FUJINET_COMMIT "cd7c0eb9a543845a3b934bc52663eeedc4656f92")
+set(FUJINET_COMMIT "07e1bed306c43d6aadaf6f1fabf92e16aa759a09")
 set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
 
 # coco_provide_dependency(NAME <n> PATH <p> SENTINEL <file> OVERRIDE <VAR>

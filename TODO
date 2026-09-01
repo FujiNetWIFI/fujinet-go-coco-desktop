@@ -16,7 +16,7 @@ Done (this pass) -- M1, M2, M3
 Build system
   * cmake/Dependencies.cmake -- coco_provide_dependency() with a new
     ARCHIVE/SHA256 branch, because XRoar ships a release tarball rather than a
-    git repository. XRoar 1.11 and fujinet-firmware cd7c0eb9a are pinned.
+    git repository. XRoar 1.11 and fujinet-firmware 07e1bed30 are pinned.
   * cmake/StageXRoar.cmake -- stages src/ + portalib/ + top-config.h into
     core/xroar-generated, swaps in the lazy-connect becker.c, and runs
     tools/xroar/patch-staged-tree.py. Re-stages when the source, the patch
