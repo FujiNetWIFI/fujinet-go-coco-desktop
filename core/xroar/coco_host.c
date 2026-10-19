@@ -115,6 +115,24 @@ void cocohost_set_becker_endpoint(const char *ip, int port) {
     }
 }
 
+/* tools/xroar/support/becker.c's tap and link state. Declared here rather
+ * than in becker.h, which stays upstream's. */
+void becker_set_trace(void (*fn)(int dir, const uint8_t *buf, size_t len));
+int becker_link_up(void);
+int becker_rx_pending(void);
+
+void cocohost_set_becker_trace(CocoBeckerTrace fn) {
+    becker_set_trace(fn);
+}
+
+int cocohost_becker_link_up(void) {
+    return becker_link_up();
+}
+
+int cocohost_becker_rx_pending(void) {
+    return becker_rx_pending();
+}
+
 /* --- joystick state (UI thread writes, emulator thread reads) ------------- */
 static atomic_int g_js_axis[JOYSTICK_NUM_PORTS][JOYSTICK_NUM_AXES];
 static atomic_int g_js_button[JOYSTICK_NUM_PORTS][JOYSTICK_NUM_BUTTONS];

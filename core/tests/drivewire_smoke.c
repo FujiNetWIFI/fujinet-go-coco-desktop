@@ -9,7 +9,8 @@
  *      second of the machine starting. That line can only appear if bytes
  *      crossed the loopback socket in BOTH directions -- the emulator asked
  *      for a sector and the runtime answered. A screen-changed check would
- *      pass on "?IO ERROR" too.
+ *      pass on "?IO ERROR" too. The debugger's FujiNet trace must have seen
+ *      the same: at least one request and one reply.
  *
  *   2. Audio. cocosession_render_audio must always hand back exactly the
  *      number of samples asked for, whatever the emulator has produced --
@@ -49,10 +50,12 @@
 #include <unistd.h>
 #endif
 
+#include "cocodebug.h"
 #include "cocosession.h"
 #include "roms_embedded.h"
 
 #define SKIP 77
+#define DWTRACE_CHECK 64
 
 static void nap_ms(int ms)
 {
@@ -166,6 +169,30 @@ static int audio_fills_every_block(cocosession *s)
     printf("drivewire_smoke: audio delivered full blocks%s\n",
            nonzero ? " (and the machine was making sound)" : " (all silent)");
     return 1;
+}
+
+/* The debugger's FujiNet trace, which runs from session start: it must
+ * have seen a request go out and a reply come back. */
+static int trace_saw_traffic(cocosession *s)
+{
+    static coco_fuji_packet p[DWTRACE_CHECK];
+    int n = cocodebug_fujinet_trace(cocosession_debugger(s), p, DWTRACE_CHECK);
+    int i, requests = 0, replies = 0;
+
+    for (i = 0; i < n; i++) {
+        if (!p[i].to_host)
+            requests++;
+        if (p[i].length > 0)
+            replies++;
+    }
+    if (requests && replies) {
+        printf("drivewire_smoke: the FujiNet trace has %d requests and %d "
+               "replies (last: %s)\n", requests, replies, p[n - 1].text);
+        return 1;
+    }
+    fprintf(stderr, "drivewire_smoke: the FujiNet trace saw %d entries, %d "
+                    "requests and %d replies.\n", n, requests, replies);
+    return 0;
 }
 
 /* Type at the machine and report whether the screen reacted. */
@@ -293,6 +320,8 @@ int main(void)
         rc = 1;
     }
     free(log);
+    if (rc == 0 && !trace_saw_traffic(s))
+        rc = 1;
 
     /* --- 2. audio -------------------------------------------------------- */
     if (rc == 0 && !audio_fills_every_block(s))

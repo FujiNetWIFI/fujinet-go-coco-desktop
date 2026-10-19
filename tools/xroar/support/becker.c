@@ -26,6 +26,11 @@
  *  succeeds (deferred socket), and the read/write/status paths (re)establish the
  *  connection -- throttled -- whenever it is down. Behaviour once connected is
  *  identical to upstream.
+ *
+ *  It also taps the link for the debugger's FujiNet tab: becker_set_trace()
+ *  sees every byte sent and every byte the CoCo reads, and becker_link_up() /
+ *  becker_rx_pending() report the link's state. Not in becker.h, which stays
+ *  upstream's; coco_host.c declares them.
  *  ---------------------------------------------------------------------------
  */
 
@@ -62,6 +67,26 @@
 #include "becker.h"
 #include "logging.h"
 #include "xroar.h"
+
+// The debugger's tap. dir 1: CoCo -> FujiNet, the bytes actually sent;
+// dir 0: FujiNet -> CoCo, the bytes the CoCo read. len 0: the link
+// (re)connected. Emulator thread.
+static void (*trace_fn)(int dir, const uint8_t *buf, size_t len);
+static volatile int link_up;
+static volatile int rx_pending;
+
+void becker_set_trace(void (*fn)(int dir, const uint8_t *buf, size_t len)) {
+	trace_fn = fn;
+}
+
+int becker_link_up(void) {
+	return link_up;
+}
+
+// Bytes received from FujiNet that the CoCo has not read yet.
+int becker_rx_pending(void) {
+	return rx_pending;
+}
 
 #ifdef WANT_BECKER
 
@@ -151,6 +176,13 @@ failed:
 	return -1;
 }
 
+static void becker_note_connected(void) {
+	link_up = 1;
+	rx_pending = 0;
+	if (trace_fn)
+		trace_fn(0, NULL, 0);
+}
+
 // If disconnected, throttled attempt to (re)connect.
 static void becker_poll_connect(struct becker *b) {
 	if (b->sockfd >= 0)
@@ -165,6 +197,7 @@ static void becker_poll_connect(struct becker *b) {
 		// Fresh connection: discard any stale buffered data.
 		b->input_buf_ptr = b->input_buf_length = 0;
 		b->output_buf_ptr = b->output_buf_length = 0;
+		becker_note_connected();
 	}
 }
 
@@ -175,6 +208,8 @@ static void becker_drop(struct becker *b) {
 	b->reconnect_countdown = RECONNECT_THROTTLE;
 	b->input_buf_ptr = b->input_buf_length = 0;
 	b->output_buf_ptr = b->output_buf_length = 0;
+	link_up = 0;
+	rx_pending = 0;
 }
 
 struct becker *becker_open(void) {
@@ -187,6 +222,8 @@ struct becker *becker_open(void) {
 	b->reconnect_countdown = 0;  // attempt immediately on first use
 	becker_reset(b);
 	b->sockfd = becker_socket_connect();
+	if (b->sockfd >= 0)
+		becker_note_connected();
 	return b;
 }
 
@@ -196,6 +233,8 @@ void becker_close(struct becker *b) {
 	}
 	if (b->sockfd >= 0)
 		close(b->sockfd);
+	link_up = 0;
+	rx_pending = 0;
 	if (b->log_data_in_hex) {
 		log_close(&b->log_data_in_hex);
 	}
@@ -219,6 +258,7 @@ static void fetch_input(struct becker *b) {
 		ssize_t new = recv(b->sockfd, b->input_buf, INPUT_BUFFER_SIZE, 0);
 		if (new > 0) {
 			b->input_buf_length = new;
+			rx_pending = new;
 			if (logging.debug_fdc & LOG_FDC_BECKER) {
 				// flush & reopen output hexdump
 				log_open_hexdump(&b->log_data_out_hex, "BECKER OUT");
@@ -239,6 +279,8 @@ static void write_output(struct becker *b) {
 	if (b->output_buf_length > 0) {
 		ssize_t sent = send(b->sockfd, b->output_buf + b->output_buf_ptr, b->output_buf_length - b->output_buf_ptr, 0);
 		if (sent > 0) {
+			if (trace_fn)
+				trace_fn(1, (const uint8_t *)b->output_buf + b->output_buf_ptr, sent);
 			if (logging.debug_fdc & LOG_FDC_BECKER) {
 				// flush & reopen input hexdump
 				log_open_hexdump(&b->log_data_in_hex, "BECKER IN ");
@@ -277,6 +319,9 @@ uint8_t becker_read_data(struct becker *b) {
 	if (b->input_buf_ptr == b->input_buf_length) {
 		b->input_buf_ptr = b->input_buf_length = 0;
 	}
+	rx_pending = b->input_buf_length - b->input_buf_ptr;
+	if (trace_fn)
+		trace_fn(0, &r, 1);
 	return r;
 }
 

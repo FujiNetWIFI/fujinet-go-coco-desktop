@@ -74,6 +74,11 @@ The replacement connects lazily and reconnects — throttled — whenever the li
 is down. Once connected, behaviour is identical to upstream. This is a
 candidate to send to XRoar rather than carry indefinitely.
 
+It also carries a passive tap for the debugger's FujiNet tab:
+`becker_set_trace()` sees every byte sent and read, and `becker_link_up()` /
+`becker_rx_pending()` report the link. They are declared in
+`core/xroar/coco_host.c`, so `becker.h` stays upstream's.
+
 ## CoCo system ROMs
 
 Color BASIC (`bas13.rom`), Extended Color BASIC (`extbas11.rom`) and the

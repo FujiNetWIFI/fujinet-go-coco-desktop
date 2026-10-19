@@ -21,6 +21,7 @@
  */
 
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,6 +36,7 @@
 #include "cocodebug.h"
 #include "compat.h"
 #include "csrcinfo.h"
+#include "dwtrace.h"
 #include "m6809dasm.h"
 #include "session_internal.h"
 #include "symtab.h"
@@ -91,7 +93,15 @@ struct cocodebug {
      * symtab, this IS read from the hook while a C-line step is in flight,
      * so swapping it (cocodebug_source_load/_clear) takes mtx. */
     cocosrcinfo *srcinfo;
+
+    /* The FujiNet tab's DriveWire trace: fed from the Becker port on the
+     * emulator thread, read from the UI, so under a lock of its own. */
+    pthread_mutex_t trace_mtx;
+    dwtrace *trace;
 };
+
+/* The debugger the Becker port's tap feeds. */
+static cocodebug *g_trace_dbg;
 
 /* ---- reaching the machine ----------------------------------------------
  * Emulator thread only. Returns NULL before the machine is built. */
@@ -216,6 +226,8 @@ cocodebug *cocodebug_create(cocosession *s)
     coco_cond_init_monotonic(&d->cv);
     d->symtab = cocosymtab_create();
     d->srcinfo = cocosrcinfo_create();
+    pthread_mutex_init(&d->trace_mtx, NULL);
+    d->trace = dwtrace_create();
     return d;
 }
 
@@ -223,8 +235,14 @@ void cocodebug_destroy(cocodebug *d)
 {
     if (!d)
         return;
+    if (g_trace_dbg == d) {
+        cocohost_set_becker_trace(NULL);
+        g_trace_dbg = NULL;
+    }
     cocosymtab_destroy(d->symtab);
     cocosrcinfo_destroy(d->srcinfo);
+    dwtrace_destroy(d->trace);
+    pthread_mutex_destroy(&d->trace_mtx);
     pthread_mutex_destroy(&d->mtx);
     pthread_cond_destroy(&d->cv);
     free(d);
@@ -744,4 +762,81 @@ int cocodebug_locals_get(cocodebug *d, cocodebug_local *out, int max)
         }
     }
     return n;
+}
+
+/* ---- FujiNet trace ------------------------------------------------------ */
+
+/* Emulator thread, from becker.c. */
+static void becker_trace(int dir, const uint8_t *buf, size_t len)
+{
+    cocodebug *d = g_trace_dbg;
+    if (!d)
+        return;
+    pthread_mutex_lock(&d->trace_mtx);
+    dwtrace_feed(d->trace, dir, buf, len);
+    pthread_mutex_unlock(&d->trace_mtx);
+}
+
+void cocodebug_trace_install(cocodebug *d)
+{
+    g_trace_dbg = d;
+    cocohost_set_becker_trace(d ? becker_trace : NULL);
+}
+
+int cocodebug_fujinet_trace(cocodebug *d, coco_fuji_packet *out, int max)
+{
+    int n;
+    if (!d)
+        return 0;
+    pthread_mutex_lock(&d->trace_mtx);
+    n = dwtrace_get(d->trace, out, max);
+    pthread_mutex_unlock(&d->trace_mtx);
+    return n;
+}
+
+void cocodebug_fujinet_trace_clear(cocodebug *d)
+{
+    if (!d)
+        return;
+    pthread_mutex_lock(&d->trace_mtx);
+    dwtrace_clear(d->trace);
+    pthread_mutex_unlock(&d->trace_mtx);
+}
+
+int cocodebug_fujinet_is_ready(const coco_fuji_packet *p)
+{
+    return p && p->device == 0xE2 && p->command == 0x00;
+}
+
+int cocodebug_fujinet_state(cocodebug *d, char *dst, int dstsz)
+{
+    unsigned long long out, in, ex;
+    char pending[96];
+    int n;
+
+    if (!d || !dst || dstsz <= 0)
+        return 0;
+    pthread_mutex_lock(&d->trace_mtx);
+    out = dwtrace_bytes(d->trace, 1);
+    in = dwtrace_bytes(d->trace, 0);
+    ex = dwtrace_exchanges(d->trace);
+    dwtrace_pending(d->trace, pending, sizeof(pending));
+    pthread_mutex_unlock(&d->trace_mtx);
+
+    n = snprintf(dst, (size_t)dstsz,
+                 "Becker port     127.0.0.1:%d\n"
+                 "FujiNet         %s\n"
+                 "Link            %s\n"
+                 "Unread          %d B\n"
+                 "\n"
+                 "CoCo \xe2\x86\x92 FujiNet  %llu B\n"
+                 "FujiNet \xe2\x86\x92 CoCo  %llu B\n"
+                 "Exchanges       %llu\n"
+                 "\n"
+                 "In progress     %s\n",
+                 COCOSESSION_BECKER_PORT,
+                 d->s->fujinet_running ? "listening" : "off",
+                 cocohost_becker_link_up() ? "connected" : "not connected",
+                 cocohost_becker_rx_pending(), out, in, ex, pending);
+    return n < dstsz ? n : dstsz - 1;
 }

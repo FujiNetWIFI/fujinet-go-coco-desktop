@@ -32,6 +32,7 @@
 #ifndef COCO_HOST_H
 #define COCO_HOST_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -96,6 +97,17 @@ void cocohost_set_rompath(const char *path);
 /* Becker port (DriveWire-over-TCP) endpoint XRoar connects out to. FujiNet
  * listens here. Defaults to 127.0.0.1:65504. */
 void cocohost_set_becker_endpoint(const char *ip, int port);
+
+/* Every byte across the Becker port, for the debugger's FujiNet tab. dir 1 is
+ * CoCo -> FujiNet (bytes actually sent), dir 0 FujiNet -> CoCo (bytes the
+ * CoCo read); len 0 means the link (re)connected. Called on the emulator
+ * thread; NULL turns it off. */
+typedef void (*CocoBeckerTrace)(int dir, const uint8_t *buf, size_t len);
+void cocohost_set_becker_trace(CocoBeckerTrace fn);
+/* Any thread. 1 while XRoar is connected to FujiNet. */
+int  cocohost_becker_link_up(void);
+/* Any thread. Bytes received from FujiNet the CoCo has not read yet. */
+int  cocohost_becker_rx_pending(void);
 
 /* --- core lifecycle (call on the emulator thread) ------------------------ */
 /* Builds argv and runs xroar_init()/xroar_init_finish(). machine is

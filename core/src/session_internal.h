@@ -132,7 +132,8 @@ void audio_stop(cocosession *s);
 int  gamepad_start(cocosession *s);
 void gamepad_stop(cocosession *s);
 
-/* debugger.c -- all emulator-thread side except create/destroy. */
+/* debugger.c -- all emulator-thread side except create/destroy and
+ * trace_install. */
 cocodebug *cocodebug_create(cocosession *s);
 void cocodebug_destroy(cocodebug *d);
 /* One debugger-controlled frame slice; returns 1 when a frame's worth of
@@ -140,6 +141,9 @@ void cocodebug_destroy(cocodebug *d);
 int  cocodebug_session_frame(cocosession *s);
 /* Unpark a paused debugger so a stopping emulator thread can exit. */
 void cocodebug_resume_for_stop(cocodebug *d);
+/* Point the Becker port's tap at d's FujiNet trace. UI thread, before the
+ * emulator thread starts. */
+void cocodebug_trace_install(cocodebug *d);
 
 /* fujinet_runtime.c */
 int  fujinet_start(cocosession *s);

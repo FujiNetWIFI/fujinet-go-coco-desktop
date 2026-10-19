@@ -21,10 +21,11 @@
  *   * No VDP, no instruction trace -- neither exists for a CoCo. In their
  *     place: one decoded screen image (cocodebug_video_decode) and Load
  *     Symbols…/Clear Symbols buttons (cocodebug_symbols_load/_clear --
- *     ADAM has no frontend affordance for this, its tables autoload). No
- *     NSTabView at all: with VDP and Trace gone there is nothing left to
- *     justify one, so this is a single flattened CPU+Video layout instead
- *     of ADAM's three-tab one.
+ *     ADAM has no frontend affordance for this, its tables autoload). With
+ *     VDP and Trace gone, CPU+Video is one flattened page rather than
+ *     ADAM's three tabs; the NSTabView it sits in is there for the FujiNet
+ *     tab alone (the Becker port's DriveWire traffic, refreshed twice a
+ *     second while it shows).
  *   * coco_dasm_line carries no embedded symbol pointer; a match is a
  *     separate cocodebug_symbol_at() call per line, appended as a
  *     "   ; NAME" suffix (matching GNOME/Windows) rather than a label
@@ -42,12 +43,24 @@
 
 #import "DebuggerWindow.h"
 
+#include <ctype.h>
+#include <stdlib.h>
+
 #include "cocodebug.h"
 #include "cocovideo.h"
 
 #define DISASM_LINES 40
 #define MEM_ROWS 16
 #define LOCALS_MAX 32
+
+/* The tabs, in order: the names COCO_DEBUGGER_TAB takes. */
+enum { TAB_CPU, TAB_FUJINET, TAB_COUNT };
+static const char *const kTabNames[TAB_COUNT] = { "cpu", "fujinet" };
+static NSString *const kTabLabels[TAB_COUNT] = { @"CPU", @"FujiNet" };
+
+/* Entries the FujiNet tab asks for: all the engine keeps, plus the one in
+ * progress. */
+#define FUJI_TRACE_MAX 513
 
 static DebuggerWindow *g_debugger;
 
@@ -105,10 +118,11 @@ static DebuggerWindow *g_debugger;
 }
 @end
 
-@interface DebuggerWindow () <NSWindowDelegate>
+@interface DebuggerWindow () <NSWindowDelegate, NSTabViewDelegate>
 - (instancetype)initWithSession:(cocosession *)session;
 - (void)refreshDisasm;
 - (void)populateSrcList:(int)fileId;
+- (void)refreshFujinet:(BOOL)force;
 @end
 
 @implementation DebuggerWindow {
@@ -145,6 +159,15 @@ static DebuggerWindow *g_debugger;
      * time): the '>' marker only appears when these match the displayed
      * file. */
     int _pcFileId, _pcLine;
+
+    NSTabView *_tabs;
+    NSTextField *_fujiNote;
+    NSButton *_fujiHideReady;
+    NSTextView *_fujiText;
+    NSTextView *_fujiState;
+    int _fujiCount;
+    uint64_t _fujiLast;
+    int _fujiTicks;
 
     NSTimer *_tick;
     uint64_t _seenSerial;
@@ -196,6 +219,7 @@ static NSImage *imageFromXRGB(const uint32_t *px, int w, int h)
     _memBase = 0;
     _pcFileId = -1;
     _srcDisplayedFileId = -1;
+    _fujiCount = -1;
     _videoBuf = (uint32_t *)calloc((size_t)COCOVIDEO_MAX_WIDTH *
                                    COCOVIDEO_MAX_HEIGHT, sizeof(uint32_t));
     [self buildWindow];
@@ -225,7 +249,23 @@ static NSImage *imageFromXRGB(const uint32_t *px, int w, int h)
         _seenSerial = serial;
         _wasPaused = paused;
         [self refreshAll:paused];
+    } else if ([self currentTab] == TAB_FUJINET && ++_fujiTicks >= 5) {
+        /* the traffic twice a second, whether or not the machine stops */
+        [self refreshFujinet:NO];
     }
+}
+
+- (int)currentTab
+{
+    return (int)[_tabs indexOfTabViewItem:_tabs.selectedTabViewItem];
+}
+
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)item
+{
+    (void)tabView;
+    (void)item;
+    if ([self currentTab] == TAB_FUJINET)
+        [self refreshFujinet:NO];
 }
 
 /* ---- construction helpers ---------------------------------------------------- */
@@ -254,6 +294,143 @@ static NSTextView *monoView(NSScrollView **scrollOut)
 - (NSTextField *)label:(NSString *)text
 {
     return [NSTextField labelWithString:text];
+}
+
+- (NSTextField *)heading:(NSString *)text
+{
+    NSTextField *l = [NSTextField labelWithString:text];
+    l.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+    return l;
+}
+
+/* A column whose scroll view takes the height left. */
+static NSStackView *column(NSArray<NSView *> *views, NSScrollView *scroll)
+{
+    NSStackView *s = [NSStackView stackViewWithViews:views];
+    s.orientation = NSUserInterfaceLayoutOrientationVertical;
+    s.alignment = NSLayoutAttributeLeading;
+    s.distribution = NSStackViewDistributionFill;
+    s.spacing = 6;
+    [scroll setContentHuggingPriority:NSLayoutPriorityDefaultLow - 1
+                       forOrientation:NSLayoutConstraintOrientationVertical];
+    for (NSView *v in views)
+        [v.widthAnchor constraintEqualToAnchor:s.widthAnchor].active = YES;
+    return s;
+}
+
+/* COCO_DEBUGGER_TAB: a tab's number or name ("cpu", "fujinet"), or the
+ * start of one, any case. */
+static int tabFromEnv(void)
+{
+    const char *tab = getenv("COCO_DEBUGGER_TAB");
+    char *end;
+    if (!tab || !*tab)
+        return -1;
+    long n = strtol(tab, &end, 10);
+    if (end != tab && *end == '\0')
+        return (n >= 0 && n < TAB_COUNT) ? (int)n : -1;
+    for (int i = 0; i < TAB_COUNT; i++) {
+        size_t k = 0;
+        while (tab[k] && tolower((unsigned char)tab[k]) == kTabNames[i][k])
+            k++;
+        if (!tab[k])
+            return i;
+    }
+    return -1;
+}
+
+/* Engine text as an NSString; never nil, so it can always be appended. */
+static NSString *textFrom(const char *s)
+{
+    NSString *t = [NSString stringWithUTF8String:s];
+    return t ? t : [NSString stringWithCString:s
+                                      encoding:NSISOLatin1StringEncoding];
+}
+
+/* Whether a view's reader is at its end (a log then follows new lines). */
+static BOOL atEnd(NSTextView *view)
+{
+    NSScrollView *scroll = view.enclosingScrollView;
+    if (!scroll)
+        return YES;
+    return NSMaxY(scroll.contentView.documentVisibleRect) >=
+           NSHeight(view.frame) - 4;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void setText(NSTextView *view, NSString *text, BOOL follow)
+{
+    if (![view.string isEqualToString:text]) {
+        NSScrollView *scroll = view.enclosingScrollView;
+        const NSPoint at =
+            scroll ? scroll.contentView.bounds.origin : NSZeroPoint;
+        view.string = text;
+        if (scroll && !follow) {
+            [scroll.contentView scrollToPoint:at];
+            [scroll reflectScrolledClipView:scroll.contentView];
+        }
+    }
+    if (follow)
+        [view scrollRangeToVisible:NSMakeRange(view.string.length, 0)];
+}
+
+- (NSView *)buildFujinet
+{
+    _fujiNote = [self label:@""];
+    _fujiNote.textColor = NSColor.secondaryLabelColor;
+    [_fujiNote setContentHuggingPriority:1
+                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    _fujiHideReady = [NSButton checkboxWithTitle:@"Hide READY probes"
+                                          target:self
+                                          action:@selector(fujiHideReady:)];
+    _fujiHideReady.state = NSControlStateValueOn;
+    _fujiHideReady.toolTip = @"fujinet-lib asks E2 00 before every call";
+    NSStackView *row = [NSStackView stackViewWithViews:@[
+        _fujiNote, _fujiHideReady,
+        [self button:@"Clear" action:@selector(fujiClear:)]
+    ]];
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.distribution = NSStackViewDistributionFill;
+    row.spacing = 8;
+
+    NSScrollView *fujiScroll, *stateScroll;
+    _fujiText = monoView(&fujiScroll);
+    _fujiState = monoView(&stateScroll);
+    NSStackView *left = column(
+        @[ [self heading:@"DriveWire packets"], row, fujiScroll ], fujiScroll);
+    NSStackView *right =
+        column(@[ [self heading:@"Becker port"], stateScroll ], stateScroll);
+    [left.widthAnchor constraintGreaterThanOrEqualToConstant:520].active = YES;
+    [right.widthAnchor constraintEqualToConstant:340].active = YES;
+
+    NSStackView *split = [NSStackView stackViewWithViews:@[ left, right ]];
+    split.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    split.distribution = NSStackViewDistributionFill;
+    split.alignment = NSLayoutAttributeTop;
+    split.spacing = 12;
+    [left setContentHuggingPriority:NSLayoutPriorityDefaultLow - 1
+                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [left.heightAnchor constraintEqualToAnchor:split.heightAnchor].active = YES;
+    [right.heightAnchor constraintEqualToAnchor:split.heightAnchor].active = YES;
+    return split;
+}
+
+/* A tab's content, inset from the tab view's edges. */
+static NSView *tabPage(NSView *content)
+{
+    NSView *holder = [[NSView alloc] init];
+    [holder addSubview:content];
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [content.leadingAnchor constraintEqualToAnchor:holder.leadingAnchor
+                                          constant:6].active = YES;
+    [content.trailingAnchor constraintEqualToAnchor:holder.trailingAnchor
+                                           constant:-6].active = YES;
+    [content.topAnchor constraintEqualToAnchor:holder.topAnchor
+                                      constant:6].active = YES;
+    [content.bottomAnchor constraintEqualToAnchor:holder.bottomAnchor
+                                         constant:-6].active = YES;
+    return holder;
 }
 
 - (void)buildWindow
@@ -317,7 +494,7 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     toolbar.spacing = 8;
 
     /* Disassembly, C source, and registers+locals+video+memory, in one
-     * split view -- no tabs. */
+     * split view: the CPU tab. */
     NSScrollView *dasmScroll = [[NSScrollView alloc] init];
     dasmScroll.hasVerticalScroller = YES;
     _disasm = [[DasmTextView alloc] initWithFrame:NSMakeRect(0, 0, 560, 600)];
@@ -423,8 +600,24 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     [split.heightAnchor constraintGreaterThanOrEqualToConstant:600].active =
         YES;
 
-    _window.contentView = root;
-    [_window setContentSize:NSMakeSize(1500, 820)];
+    NSView *pages[TAB_COUNT];
+    pages[TAB_CPU] = root;
+    pages[TAB_FUJINET] = [self buildFujinet];
+    _tabs = [[NSTabView alloc] init];
+    for (int i = 0; i < TAB_COUNT; i++) {
+        NSTabViewItem *item =
+            [[NSTabViewItem alloc] initWithIdentifier:@(kTabNames[i])];
+        item.label = kTabLabels[i];
+        item.view = tabPage(pages[i]);
+        [_tabs addTabViewItem:item];
+    }
+    const int tab = tabFromEnv();
+    if (tab >= 0)
+        [_tabs selectTabViewItemAtIndex:tab];
+    _tabs.delegate = self;
+
+    _window.contentView = _tabs;
+    [_window setContentSize:NSMakeSize(1500, 860)];
     [_window center];
 }
 
@@ -572,6 +765,19 @@ static NSTextView *monoView(NSScrollView **scrollOut)
     _srcView.string = @"";
 }
 
+- (void)fujiClear:(id)sender
+{
+    (void)sender;
+    cocodebug_fujinet_trace_clear(_dbg);
+    [self refreshFujinet:YES];
+}
+
+- (void)fujiHideReady:(id)sender
+{
+    (void)sender;
+    [self refreshFujinet:YES];
+}
+
 - (void)srcFileChanged:(id)sender
 {
     (void)sender;
@@ -632,6 +838,52 @@ static NSTextView *monoView(NSScrollView **scrollOut)
         _memView.string = @"";
         _video.image = nil;
     }
+    if ([self currentTab] == TAB_FUJINET)
+        [self refreshFujinet:NO];
+}
+
+- (void)refreshFujinet:(BOOL)force
+{
+    static coco_fuji_packet p[FUJI_TRACE_MAX];
+    char state[1024];
+    const int n = cocodebug_fujinet_trace(_dbg, p, FUJI_TRACE_MAX);
+    const BOOL hide = _fujiHideReady.state == NSControlStateValueOn;
+
+    if (!cocosession_fujinet_running(_session))
+        _fujiNote.stringValue = @"FujiNet is off (Settings ▸ FujiNet).";
+    else
+        _fujiNote.stringValue =
+            cocosession_fujinet_link(_session)
+                ? @"FujiNet is on the Becker port, connected."
+                : @"FujiNet is on the Becker port, not connected.";
+    cocodebug_fujinet_state(_dbg, state, (int)sizeof state);
+    setText(_fujiState, textFrom(state), NO);
+    _fujiTicks = 0;
+
+    if (!force && n == _fujiCount && (n == 0 || p[n - 1].serial == _fujiLast))
+        return;
+    _fujiCount = n;
+    _fujiLast = n > 0 ? p[n - 1].serial : 0;
+    const BOOL follow = force || atEnd(_fujiText);
+    NSMutableString *text = [NSMutableString string];
+    int shown = 0;
+    for (int i = 0; i < n; i++) {
+        if (hide && cocodebug_fujinet_is_ready(&p[i]))
+            continue;
+        if (shown++)
+            [text appendString:@"\n"];
+        [text appendString:textFrom(p[i].text)];
+        [text appendString:@"\n     "];
+        for (int k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            [text appendFormat:@"%02X ", p[i].data[k]];
+        if (p[i].nbytes > (int)sizeof p[i].data)
+            [text appendString:@"…"];
+    }
+    if (shown == 0)
+        [text setString:n ? @"(only READY probes since the trace was cleared)"
+                          : @"(no DriveWire traffic since the trace was "
+                            @"cleared)"];
+    setText(_fujiText, text, follow);
 }
 
 - (void)refreshDisasm

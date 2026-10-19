@@ -19,8 +19,8 @@
  *     memory are display-only here too, matching GNOME.
  *   * No VDP, no instruction trace -- neither exists for a CoCo. In their
  *     place: a single decoded screen image (cocodebug_video_decode, one
- *     pane, dynamic size, no tab control needed at all) and a symbol
- *     table (cocodebug_symbol_at/find/load/clear) with its own Load
+ *     pane, dynamic size) and a symbol table
+ *     (cocodebug_symbol_at/find/load/clear) with its own Load
  *     Symbols.../Clear Symbols toolbar buttons -- adamdebug has no
  *     equivalent UI for this to copy from, since its symbol tables load
  *     automatically with no frontend affordance.
@@ -28,6 +28,10 @@
  *     separate cocodebug_symbol_at() call per line, appended as a
  *     "   ; NAME" suffix (GNOME's rendering convention) rather than a
  *     label line of its own.
+ *
+ * Two tabs, as in the other frontends: all of the above, and FujiNet's
+ * DriveWire traffic on the Becker port, refreshed twice a second while it
+ * shows. That text is UTF-8 (arrows), so its views are set as wide text.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -37,6 +41,7 @@
 
 #include <commctrl.h>
 #include <commdlg.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +57,15 @@
 #define WM_DBG_ACCEPT (WM_APP + 1) /* wp: control id -- Enter in an edit */
 #define TIMER_REFRESH 1
 
+/* The tabs, in order: the names COCO_DEBUGGER_TAB takes. */
+enum { TAB_CPU, TAB_FUJINET, TAB_COUNT };
+static const char *const k_tab_names[TAB_COUNT] = { "cpu", "fujinet" };
+static const char *const k_tab_labels[TAB_COUNT] = { "CPU", "FujiNet" };
+
+/* Entries the FujiNet tab asks for: all the engine keeps, plus the one in
+ * progress. */
+#define FUJI_TRACE_MAX 513
+
 enum {
     IDC_RUN = 1000, IDC_STEP, IDC_STEP_OVER, IDC_STEP_OUT, IDC_CLEAR_BP,
     IDC_LOAD_SYM, IDC_CLEAR_SYM, IDC_STATUS,
@@ -59,6 +73,8 @@ enum {
     IDC_SRC_COMBO, IDC_SRC_VIEW, IDC_LOCALS,
     IDC_DISASM, IDC_REGS, IDC_VIDEO,
     IDC_MEM_ADDR, IDC_MEM_GO, IDC_MEM_VIEW,
+    IDC_TABS, IDC_FUJI_TITLE, IDC_FUJI_NOTE, IDC_FUJI_HIDE, IDC_FUJI_CLEAR,
+    IDC_FUJI_TEXT, IDC_FUJI_STATE_TITLE, IDC_FUJI_STATE,
 };
 
 typedef struct {
@@ -74,9 +90,17 @@ typedef struct {
     HWND src_combo, src_view, locals;
     HWND disasm, regs, video;
     HWND mem_addr, mem_go, mem_view;
+    HWND tabs;
+    HWND fuji_title, fuji_note, fuji_hide, fuji_clear, fuji_text;
+    HWND state_title, state_text;
 
     HFONT mono;
+    int mono_h;
     HACCEL accel;
+    int page;
+    int fuji_count;
+    uint64_t fuji_last;
+    int fuji_ticks;
 
     cocosession *session;
     cocodebug *dbg;
@@ -148,6 +172,72 @@ static int parse_addr(debugger *d, const char *text, uint16_t *out)
         return 1;
     }
     return 0;
+}
+
+/* ---- the FujiNet tab's text views --------------------------------------------- */
+
+/* Engine text (UTF-8, \n) as the wide text, with CR LF, an EDIT shows. */
+static wchar_t *wide_text(const char *text)
+{
+    size_t n = strlen(text), i, o = 0;
+    char *buf = (char *)malloc(n * 2 + 1);
+    wchar_t *w = NULL;
+    int wn;
+    if (!buf)
+        return NULL;
+    for (i = 0; i < n; i++) {
+        if (text[i] == '\n')
+            buf[o++] = '\r';
+        buf[o++] = text[i];
+    }
+    buf[o] = '\0';
+    wn = MultiByteToWideChar(CP_UTF8, 0, buf, -1, NULL, 0);
+    if (wn > 0 && (w = (wchar_t *)malloc((size_t)wn * sizeof(*w))) != NULL)
+        MultiByteToWideChar(CP_UTF8, 0, buf, -1, w, wn);
+    free(buf);
+    return w;
+}
+
+static void set_label_utf8(HWND h, const char *text)
+{
+    wchar_t *w = wide_text(text);
+    if (!w)
+        return;
+    SetWindowTextW(h, w);
+    free(w);
+}
+
+/* Whether a log's reader is at its end (it then follows new lines). */
+static int edit_at_end(debugger *d, HWND h)
+{
+    RECT c;
+    int rows;
+    const int first = (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    const int count = (int)SendMessageW(h, EM_GETLINECOUNT, 0, 0);
+    GetClientRect(h, &c);
+    rows = d->mono_h > 0 && c.bottom > d->mono_h ? c.bottom / d->mono_h : 1;
+    return first + rows >= count;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void set_text_at(HWND h, const char *text, int follow)
+{
+    const int first = (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0);
+    wchar_t *w = wide_text(text);
+    if (!w)
+        return;
+    SendMessageW(h, WM_SETREDRAW, FALSE, 0);
+    SetWindowTextW(h, w);
+    if (follow)
+        SendMessageW(h, EM_LINESCROLL, 0,
+                     SendMessageW(h, EM_GETLINECOUNT, 0, 0));
+    else
+        SendMessageW(h, EM_LINESCROLL, 0,
+                     first - (int)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0));
+    SendMessageW(h, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(h, NULL, TRUE);
+    free(w);
 }
 
 /* ---- refreshers ------------------------------------------------------------- */
@@ -469,6 +559,56 @@ static void clear_views(debugger *d)
     InvalidateRect(d->video, NULL, FALSE);
 }
 
+static void refresh_fujinet(debugger *d, int force)
+{
+    static coco_fuji_packet p[FUJI_TRACE_MAX];
+    static char t[FUJI_TRACE_MAX * 320 + 128];
+    char state[1024];
+    size_t len = 0;
+    const int n = cocodebug_fujinet_trace(d->dbg, p, FUJI_TRACE_MAX);
+    const int hide =
+        SendMessageA(d->fuji_hide, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    int i, follow, shown = 0;
+
+    if (!cocosession_fujinet_running(d->session))
+        set_label_utf8(d->fuji_note,
+                       "FujiNet is off (Machine \xe2\x96\xb8 Settings).");
+    else
+        set_label_utf8(d->fuji_note,
+                       cocosession_fujinet_link(d->session)
+                           ? "FujiNet is on the Becker port, connected."
+                           : "FujiNet is on the Becker port, not connected.");
+    cocodebug_fujinet_state(d->dbg, state, sizeof(state));
+    set_text_at(d->state_text, state, 0);
+    d->fuji_ticks = 0;
+
+    if (!force && n == d->fuji_count &&
+        (n == 0 || p[n - 1].serial == d->fuji_last))
+        return;
+    follow = force || d->fuji_count < 0 || edit_at_end(d, d->fuji_text);
+    d->fuji_count = n;
+    d->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    t[0] = '\0';
+    for (i = 0; i < n && len + 400 < sizeof(t); i++) {
+        int k;
+        if (hide && cocodebug_fujinet_is_ready(&p[i]))
+            continue;
+        len += (size_t)snprintf(t + len, sizeof(t) - len, "%s%s\n     ",
+                                shown++ ? "\n" : "", p[i].text);
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            len += (size_t)snprintf(t + len, sizeof(t) - len, "%02X ",
+                                    p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof p[i].data)
+            len += (size_t)snprintf(t + len, sizeof(t) - len,
+                                    "\xe2\x80\xa6");
+    }
+    if (shown == 0)
+        snprintf(t, sizeof(t), "%s",
+                 n ? "(only READY probes since the trace was cleared)"
+                   : "(no DriveWire traffic since the trace was cleared)");
+    set_text_at(d->fuji_text, t, follow);
+}
+
 static void refresh_all(debugger *d, int paused)
 {
     set_text(d->run_btn, paused ? "Run" : "Pause");
@@ -487,6 +627,8 @@ static void refresh_all(debugger *d, int paused)
          * clear it rather than leave a stale snapshot that looks live. */
         clear_views(d);
     }
+    if (d->page == TAB_FUJINET)
+        refresh_fujinet(d, 0);
 }
 
 /* ---- actions ---------------------------------------------------------------- */
@@ -824,16 +966,113 @@ static void build_controls(debugger *d)
     d->mem_addr = field(d, IDC_MEM_ADDR);
     d->mem_go = child(d, "BUTTON", "Go", BS_PUSHBUTTON, IDC_MEM_GO);
     d->mem_view = mono_view(d, IDC_MEM_VIEW);
+
+    /* The tab control is the strip alone: the pages sit on the window's own
+     * background. */
+    {
+        TCITEMA item;
+        int i;
+        d->tabs = child(d, WC_TABCONTROLA, "", WS_CLIPSIBLINGS, IDC_TABS);
+        memset(&item, 0, sizeof(item));
+        item.mask = TCIF_TEXT;
+        for (i = 0; i < TAB_COUNT; i++) {
+            item.pszText = (char *)k_tab_labels[i];
+            SendMessageA(d->tabs, TCM_INSERTITEMA, (WPARAM)i, (LPARAM)&item);
+        }
+    }
+
+    d->fuji_title = child(d, "STATIC", "DriveWire packets", SS_LEFT,
+                          IDC_FUJI_TITLE);
+    d->fuji_note = child(d, "STATIC", "", SS_LEFT | SS_ENDELLIPSIS,
+                         IDC_FUJI_NOTE);
+    d->fuji_hide = child(d, "BUTTON", "Hide READY probes", BS_AUTOCHECKBOX,
+                         IDC_FUJI_HIDE);
+    SendMessageA(d->fuji_hide, BM_SETCHECK, BST_CHECKED, 0);
+    d->fuji_clear = child(d, "BUTTON", "Clear", BS_PUSHBUTTON, IDC_FUJI_CLEAR);
+    d->fuji_text = mono_view(d, IDC_FUJI_TEXT);
+    d->state_title = child(d, "STATIC", "Becker port", SS_LEFT,
+                           IDC_FUJI_STATE_TITLE);
+    d->state_text = mono_view(d, IDC_FUJI_STATE);
+}
+
+static void show_page(debugger *d, int page)
+{
+    HWND cpu[] = {
+        d->run_btn, d->step_btn, d->step_over_btn, d->step_out_btn,
+        d->step_line_btn, d->step_over_line_btn, d->clear_bp_btn,
+        d->load_sym_btn, d->clear_sym_btn, d->load_src_btn, d->clear_src_btn,
+        d->status, d->disasm, d->src_combo, d->src_view, d->regs, d->locals,
+        d->video, d->mem_addr, d->mem_go, d->mem_view,
+    };
+    HWND fuji[] = {
+        d->fuji_title, d->fuji_note, d->fuji_hide, d->fuji_clear,
+        d->fuji_text, d->state_title, d->state_text,
+    };
+    size_t i;
+
+    d->page = page;
+    for (i = 0; i < sizeof(cpu) / sizeof(cpu[0]); i++)
+        ShowWindow(cpu[i], page == TAB_CPU ? SW_SHOW : SW_HIDE);
+    for (i = 0; i < sizeof(fuji) / sizeof(fuji[0]); i++)
+        ShowWindow(fuji[i], page == TAB_FUJINET ? SW_SHOW : SW_HIDE);
+}
+
+/* COCO_DEBUGGER_TAB: a tab's number or name ("cpu", "fujinet"), or the
+ * start of one, any case. */
+static int tab_from_env(void)
+{
+    const char *tab = getenv("COCO_DEBUGGER_TAB");
+    char *end;
+    long n;
+    int i;
+    size_t k;
+
+    if (!tab || !*tab)
+        return -1;
+    n = strtol(tab, &end, 10);
+    if (end != tab && *end == '\0')
+        return (n >= 0 && n < TAB_COUNT) ? (int)n : -1;
+    for (i = 0; i < TAB_COUNT; i++) {
+        for (k = 0; tab[k] && tolower((unsigned char)tab[k]) ==
+                                  k_tab_names[i][k]; k++)
+            ;
+        if (!tab[k])
+            return i;
+    }
+    return -1;
 }
 
 static void layout(debugger *d)
 {
-    RECT client;
-    int y = 8, bx = 8;
+    RECT client, strip;
+    int y, bx = 8;
     int top_h, mid_top, mid_h, left_w, src_w, right_x1, right_x2, right_w;
     int mem_row_y;
 
     GetClientRect(d->hwnd, &client);
+
+    SetRect(&strip, 0, 0, 400, 400);
+    SendMessageA(d->tabs, TCM_ADJUSTRECT, FALSE, (LPARAM)&strip);
+    MoveWindow(d->tabs, 8, 8, client.right - 16, strip.top, TRUE);
+    y = 8 + strip.top + 6;
+
+    /* FujiNet: the packets left (a note, the READY filter and Clear over
+     * them), the Becker port right. */
+    {
+        const int h = client.bottom - 8 - y;
+        int rw = (client.right - 16) / 3;
+        int lw;
+        if (rw > 380) rw = 380;
+        if (rw < 240) rw = 240;
+        lw = client.right - 16 - rw - 12;
+        MoveWindow(d->fuji_title, 8, y, lw, 20, TRUE);
+        MoveWindow(d->fuji_clear, 8 + lw - 80, y + 24, 80, 26, TRUE);
+        MoveWindow(d->fuji_hide, 8 + lw - 80 - 8 - 190, y + 26, 190, 22, TRUE);
+        MoveWindow(d->fuji_note, 8, y + 29, lw - 80 - 8 - 190 - 8, 20, TRUE);
+        MoveWindow(d->fuji_text, 8, y + 56, lw, h - 56, TRUE);
+        MoveWindow(d->state_title, 8 + lw + 12, y, rw, 20, TRUE);
+        MoveWindow(d->state_text, 8 + lw + 12, y + 24, rw, h - 24, TRUE);
+    }
 
     MoveWindow(d->run_btn, bx, y, 110, 26, TRUE);            bx += 116;
     MoveWindow(d->step_btn, bx, y, 100, 26, TRUE);           bx += 106;
@@ -900,9 +1139,22 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 d->seen_serial = serial;
                 d->was_paused = paused;
                 refresh_all(d, paused);
+            } else if (d->page == TAB_FUJINET && ++d->fuji_ticks >= 5) {
+                /* the traffic twice a second, whether or not it stops */
+                refresh_fujinet(d, 0);
             }
         }
         return 0;
+    case WM_NOTIFY: {
+        const NMHDR *nh = (const NMHDR *)lp;
+        if (nh->hwndFrom == d->tabs && nh->code == (UINT)TCN_SELCHANGE) {
+            show_page(d, (int)SendMessageA(d->tabs, TCM_GETCURSEL, 0, 0));
+            if (d->page == TAB_FUJINET)
+                refresh_fujinet(d, 0);
+            return 0;
+        }
+        break;
+    }
     case WM_DBG_ACCEPT:
         on_accept(d, (int)wp);
         return 0;
@@ -935,6 +1187,14 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             }
             return 0;
         case IDC_MEM_GO:     on_accept(d, IDC_MEM_ADDR); return 0;
+        case IDC_FUJI_CLEAR:
+            cocodebug_fujinet_trace_clear(d->dbg);
+            refresh_fujinet(d, 1);
+            return 0;
+        case IDC_FUJI_HIDE:
+            if (HIWORD(wp) == BN_CLICKED)
+                refresh_fujinet(d, 1);
+            return 0;
         default: break;
         }
         break;
@@ -983,7 +1243,7 @@ void coco_debugger_show(HWND parent, cocosession *session)
     inst = (HINSTANCE)GetWindowLongPtrA(parent, GWLP_HINSTANCE);
 
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_STANDARD_CLASSES | ICC_TAB_CLASSES;
     InitCommonControlsEx(&icc);
 
     memset(&wc, 0, sizeof(wc));
@@ -1020,6 +1280,7 @@ void coco_debugger_show(HWND parent, cocosession *session)
     }
     d->pc_file_id = -1;
     d->src_displayed_file_id = -1;
+    d->fuji_count = -1;
     g_dbg = d;
 
     d->hwnd = CreateWindowExA(0, "CocoDebuggerWindow", "Debugger",
@@ -1036,8 +1297,22 @@ void coco_debugger_show(HWND parent, cocosession *session)
                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                           CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                           FIXED_PITCH | FF_MODERN, "Consolas");
+    {
+        HDC dc = GetDC(d->hwnd);
+        HGDIOBJ prev = SelectObject(dc, d->mono);
+        TEXTMETRICA tm;
+        d->mono_h = GetTextMetricsA(dc, &tm) ? tm.tmHeight : 15;
+        SelectObject(dc, prev);
+        ReleaseDC(d->hwnd, dc);
+    }
 
     build_controls(d);
+    {
+        const int tab = tab_from_env();
+        if (tab >= 0)
+            SendMessageA(d->tabs, TCM_SETCURSEL, (WPARAM)tab, 0);
+        show_page(d, tab >= 0 ? tab : TAB_CPU);
+    }
 
     /* F5/F6/F7/F8/Shift+F6/Shift+F8 work wherever the focus is inside the
      * window, matching the other frontends' shortcuts. */

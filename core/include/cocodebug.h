@@ -40,7 +40,8 @@ typedef struct {
     uint8_t a, b, dp, cc;
 } cocodebug_regs;
 
-/* Lazily created by cocosession_debugger(); owned by the session. */
+/* Created by cocosession_start (or cocosession_debugger before it); owned
+ * by the session. */
 
 /* Engage or release the debugger. Engaging does not pause: it switches the
  * emulator loop to the path that honours breakpoints, which costs one hook
@@ -195,6 +196,31 @@ typedef struct {
  * before the function's first C statement -- U is still the caller's frame
  * there, so there is nothing correct to report. */
 int cocodebug_locals_get(cocodebug *d, cocodebug_local *out, int max);
+
+/* ---- FujiNet: the DriveWire traffic on the Becker port --------------------
+ * Recorded from session start whether or not the debugger is engaged, so it
+ * shows what happened before anyone looked. Safe from any thread. See
+ * core/debugger/dwtrace.h for how the bytes are cut into entries. */
+typedef struct {
+    uint64_t serial;   /* new whenever the entry changes */
+    int      to_host;  /* 1: FujiNet -> CoCo with no request before it */
+    int      device;   /* the DriveWire opcode (E2 FUJI, D2 READEX...), -1 */
+    int      command;  /* the FUJI/NET/CPM/CLOCK command byte, else -1 */
+    int      length;   /* bytes FujiNet sent back, -1 for none */
+    int      nbytes;   /* bytes in the exchange, both ways */
+    uint8_t  data[64]; /* its first bytes: the request's, then the reply's */
+    char     text[96]; /* "→ FUJI E8 GET ADAPTERCONFIG ← 140 B" */
+    uint32_t repeat;   /* identical exchanges in a row folded into this one */
+} coco_fuji_packet;
+
+/* The newest max entries, oldest first. Returns how many. */
+int  cocodebug_fujinet_trace(cocodebug *d, coco_fuji_packet *out, int max);
+void cocodebug_fujinet_trace_clear(cocodebug *d);
+/* A bus_ready probe (FUJI 00 DEVICE READY): what "Hide READY probes"
+ * hides. */
+int  cocodebug_fujinet_is_ready(const coco_fuji_packet *p);
+/* The Becker port's state as text lines, for the pane beside the list. */
+int  cocodebug_fujinet_state(cocodebug *d, char *dst, int dstsz);
 
 #ifdef __cplusplus
 }

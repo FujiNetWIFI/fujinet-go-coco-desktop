@@ -244,6 +244,7 @@ add_library(cocosession STATIC
   debugger/cocovideo.c
   debugger/symtab.c
   debugger/csrcinfo.c
+  debugger/dwtrace.c
   "${COCO_ROMS_C}"
 )
 
@@ -308,6 +309,12 @@ target_include_directories(csrcinfo_test PRIVATE debugger)
 target_compile_definitions(csrcinfo_test PRIVATE
   CSRCINFO_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
 
+# The FujiNet tab's DriveWire decoder, on made-up bytes: no ROMs, no
+# network.
+add_executable(dwtrace_test tests/dwtrace_test.c)
+target_link_libraries(dwtrace_test cocosession)
+target_include_directories(dwtrace_test PRIVATE debugger)
+
 add_executable(session_test tests/session_test.c)
 target_link_libraries(session_test cocosession)
 
@@ -332,6 +339,7 @@ add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME symtab COMMAND symtab_test)
 add_test(NAME csrcinfo COMMAND csrcinfo_test)
+add_test(NAME dwtrace COMMAND dwtrace_test)
 add_test(NAME debug COMMAND debug_test)
 add_test(NAME cpu_switch COMMAND cpu_switch_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)

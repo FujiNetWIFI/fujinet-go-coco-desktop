@@ -464,6 +464,12 @@ int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
     if (opts->enable_fujinet && fujinet_start(s) == 0)
         fujinet_wait_for_becker(s, 10000);
 
+    /* The debugger's FujiNet trace runs from here, not from when the
+     * debugger opens: it is most useful about what happened first. */
+    if (!s->debugger)
+        s->debugger = cocodebug_create(s);
+    cocodebug_trace_install(s->debugger);
+
     s->stop_flag = 0;
     s->frame_serial = 0;
     s->frame_w = 0;
@@ -690,6 +696,11 @@ int cocosession_fujinet_running(const cocosession *s)
     return s->fujinet_running;
 }
 
+int cocosession_fujinet_link(const cocosession *s)
+{
+    return s && s->running && cocohost_becker_link_up();
+}
+
 int cocosession_fujinet_copy_log(cocosession *s, char *dst, int max)
 {
     return fujinet_copy_log(s, dst, max);
@@ -697,9 +708,9 @@ int cocosession_fujinet_copy_log(cocosession *s, char *dst, int max)
 
 cocodebug *cocosession_debugger(cocosession *s)
 {
-    /* Created lazily: a session that never opens the debugger pays nothing,
-     * and while it is disengaged the emulator loop costs one volatile read
-     * per frame. */
+    /* cocosession_start creates it for the FujiNet trace; this covers a
+     * session that has not started. Disengaged, the emulator loop costs one
+     * volatile read per frame. */
     pthread_mutex_lock(&s->lifecycle_mtx);
     if (!s->debugger)
         s->debugger = cocodebug_create(s);

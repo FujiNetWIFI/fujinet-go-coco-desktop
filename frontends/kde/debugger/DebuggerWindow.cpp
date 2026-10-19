@@ -8,13 +8,18 @@
  * inside XRoar, and touching widgets from there would be a threading bug; a
  * timer on the UI thread cannot be.
  *
+ * Two tabs, like GNOME's: the 6809 view, and FujiNet's DriveWire traffic on
+ * the Becker port, which refreshes twice a second while it shows.
+ *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include "debugger/DebuggerWindow.h"
 
+#include <QCheckBox>
 #include <QComboBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
 #include <QFontDatabase>
@@ -25,10 +30,14 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QSplitter>
+#include <QTabWidget>
 #include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -50,10 +59,80 @@ constexpr int kDisasmLines = 24;
 constexpr int kMemBytesPerRow = 16;
 constexpr int kMemRows = 16;
 
+/* The tabs, in order: the names COCO_DEBUGGER_TAB takes. */
+enum { kTabCpu, kTabFujinet, kTabCount };
+const char *const kTabNames[kTabCount] = { "cpu", "fujinet" };
+
+/* Entries the FujiNet tab asks for: all the engine keeps, plus the one in
+ * progress. */
+constexpr int kFujiTraceMax = 513;
+
+/* COCO_DEBUGGER_TAB: a tab's number or name ("cpu", "fujinet"), or the
+ * start of one, any case. */
+int tabFromEnv()
+{
+    const QString tab = qEnvironmentVariable("COCO_DEBUGGER_TAB");
+    if (tab.isEmpty())
+        return -1;
+    bool ok = false;
+    const int n = tab.toInt(&ok);
+    if (ok)
+        return n >= 0 && n < kTabCount ? n : -1;
+    for (int i = 0; i < kTabCount; i++)
+        if (QString::fromLatin1(kTabNames[i]).startsWith(tab, Qt::CaseInsensitive))
+            return i;
+    return -1;
+}
+
+QLabel *titleLabel(const QString &text)
+{
+    auto *l = new QLabel(text);
+    QFont f = l->font();
+    f.setBold(true);
+    l->setFont(f);
+    return l;
+}
+
+/* By family and hint, as msdos does: the platform's FixedFont can come back
+ * proportional outside Plasma, and these columns must line up. */
+QPlainTextEdit *monoView()
+{
+    auto *v = new QPlainTextEdit;
+    QFont f = v->font();
+    f.setFamily(QStringLiteral("monospace"));
+    f.setStyleHint(QFont::TypeWriter);
+    v->setFont(f);
+    v->setReadOnly(true);
+    v->setLineWrapMode(QPlainTextEdit::NoWrap);
+    return v;
+}
+
+/* Whether a view's reader is at its end (a log then follows new lines). */
+bool atEnd(QPlainTextEdit *v)
+{
+    return v->verticalScrollBar()->value() >= v->verticalScrollBar()->maximum() - 1;
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+void setText(QPlainTextEdit *v, const QString &text, bool follow = false)
+{
+    if (v->toPlainText() == text) {
+        if (follow)
+            v->verticalScrollBar()->setValue(v->verticalScrollBar()->maximum());
+        return;
+    }
+    const int top = v->verticalScrollBar()->value();
+    const int left = v->horizontalScrollBar()->value();
+    v->setPlainText(text);
+    v->verticalScrollBar()->setValue(follow ? v->verticalScrollBar()->maximum() : top);
+    v->horizontalScrollBar()->setValue(left);
+}
+
 class DebuggerDialog : public QWidget {
 public:
-    DebuggerDialog(QWidget *parent, cocodebug *dbg)
-        : QWidget(parent, Qt::Window), m_dbg(dbg),
+    DebuggerDialog(QWidget *parent, cocosession *session, cocodebug *dbg)
+        : QWidget(parent, Qt::Window), m_session(session), m_dbg(dbg),
           m_videoBuf((size_t)COCOVIDEO_MAX_WIDTH * COCOVIDEO_MAX_HEIGHT, 0)
     {
         setWindowTitle(QStringLiteral("Debugger"));
@@ -63,6 +142,10 @@ public:
 
         m_status = new QLabel(QStringLiteral("Running"), this);
         outer->addWidget(m_status);
+
+        auto *cpuPage = new QWidget;
+        auto *cpu = new QVBoxLayout(cpuPage);
+        cpu->setContentsMargins(0, 0, 0, 0);
 
         auto *bar = new QHBoxLayout;
         m_runPause = addButton(bar, QStringLiteral("Pause"),
@@ -122,7 +205,7 @@ public:
                       m_seenSerial = 0;
                   });
         bar->addStretch();
-        outer->addLayout(bar);
+        cpu->addLayout(bar);
 
         auto *panes = new QHBoxLayout;
         m_disasm = new QListWidget(this);
@@ -182,7 +265,7 @@ public:
         sidebar->addWidget(m_video, 1);
 
         panes->addLayout(sidebar);
-        outer->addLayout(panes, 1);
+        cpu->addLayout(panes, 1);
 
         auto *memBar = new QHBoxLayout;
         memBar->addWidget(new QLabel(QStringLiteral("Address:"), this));
@@ -197,12 +280,24 @@ public:
                 [this] { goToMemAddr(); });
         memBar->addWidget(memGo);
         memBar->addStretch();
-        outer->addLayout(memBar);
+        cpu->addLayout(memBar);
 
         m_mem = new QLabel(this);
         m_mem->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
         m_mem->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-        outer->addWidget(m_mem);
+        cpu->addWidget(m_mem);
+
+        m_tabs = new QTabWidget(this);
+        m_tabs->addTab(cpuPage, QStringLiteral("CPU"));
+        m_tabs->addTab(buildFujinet(), QStringLiteral("FujiNet"));
+        const int tab = tabFromEnv();
+        if (tab >= 0)
+            m_tabs->setCurrentIndex(tab);
+        connect(m_tabs, &QTabWidget::currentChanged, this, [this](int i) {
+            if (i == kTabFujinet)
+                refreshFujinet(false);
+        });
+        outer->addWidget(m_tabs, 1);
 
         new QShortcut(QKeySequence(Qt::Key_F5), this, [this] { toggleRun(); });
         new QShortcut(QKeySequence(Qt::Key_F6), this,
@@ -238,6 +333,95 @@ public:
     }
 
 private:
+    QWidget *buildFujinet()
+    {
+        auto *split = new QSplitter(Qt::Horizontal);
+        auto *left = new QWidget;
+        auto *lv = new QVBoxLayout(left);
+        lv->addWidget(titleLabel(QStringLiteral("DriveWire packets")));
+        auto *row = new QHBoxLayout;
+        m_fujiNote = new QLabel;
+        m_fujiNote->setStyleSheet(QStringLiteral("color: gray;"));
+        m_fujiNote->setWordWrap(true);
+        m_fujiHideReady = new QCheckBox(QStringLiteral("Hide READY probes"));
+        m_fujiHideReady->setChecked(true);
+        m_fujiHideReady->setToolTip(
+            QStringLiteral("fujinet-lib asks E2 00 before every call"));
+        connect(m_fujiHideReady, &QCheckBox::toggled, this,
+                [this] { refreshFujinet(true); });
+        auto *clear = new QPushButton(QStringLiteral("Clear"));
+        connect(clear, &QPushButton::clicked, this, [this] {
+            cocodebug_fujinet_trace_clear(m_dbg);
+            refreshFujinet(true);
+        });
+        row->addWidget(m_fujiNote, 1);
+        row->addWidget(m_fujiHideReady);
+        row->addWidget(clear);
+        lv->addLayout(row);
+        m_fujiText = monoView();
+        lv->addWidget(m_fujiText, 1);
+        left->setMinimumWidth(560);
+
+        auto *right = new QWidget;
+        auto *rv = new QVBoxLayout(right);
+        rv->addWidget(titleLabel(QStringLiteral("Becker port")));
+        m_fujiState = monoView();
+        rv->addWidget(m_fujiState, 1);
+        right->setMinimumWidth(340);
+        split->addWidget(left);
+        split->addWidget(right);
+        split->setStretchFactor(0, 3);
+        split->setStretchFactor(1, 2);
+        split->setChildrenCollapsible(false);
+        return split;
+    }
+
+    void refreshFujinet(bool force)
+    {
+        static coco_fuji_packet p[kFujiTraceMax];
+        char state[1024];
+        const int n = cocodebug_fujinet_trace(m_dbg, p, kFujiTraceMax);
+        const bool hide = m_fujiHideReady->isChecked();
+
+        if (!cocosession_fujinet_running(m_session))
+            m_fujiNote->setText(
+                QStringLiteral("FujiNet is off (Settings ▸ FujiNet)."));
+        else
+            m_fujiNote->setText(
+                cocosession_fujinet_link(m_session)
+                    ? QStringLiteral("FujiNet is on the Becker port, connected.")
+                    : QStringLiteral("FujiNet is on the Becker port, not "
+                                     "connected."));
+        cocodebug_fujinet_state(m_dbg, state, sizeof(state));
+        setText(m_fujiState, QString::fromUtf8(state));
+        m_fujiClock.restart();
+
+        if (!force && n == m_fujiCount &&
+            (n == 0 || p[n - 1].serial == m_fujiLast))
+            return;
+        m_fujiCount = n;
+        m_fujiLast = n > 0 ? p[n - 1].serial : 0;
+        QString t;
+        int shown = 0;
+        for (int i = 0; i < n; i++) {
+            if (hide && cocodebug_fujinet_is_ready(&p[i]))
+                continue;
+            if (shown++)
+                t += QLatin1Char('\n');
+            t += QString::fromUtf8(p[i].text) + QStringLiteral("\n     ");
+            for (int k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+                t += hex8(p[i].data[k]) + QLatin1Char(' ');
+            if (p[i].nbytes > (int)sizeof p[i].data)
+                t += QStringLiteral("…");
+        }
+        if (shown == 0)
+            t = n ? QStringLiteral("(only READY probes since the trace was "
+                                   "cleared)")
+                  : QStringLiteral("(no DriveWire traffic since the trace was "
+                                   "cleared)");
+        setText(m_fujiText, t, force || atEnd(m_fujiText));
+    }
+
     template <typename F>
     QPushButton *addButton(QHBoxLayout *bar, const QString &label,
                            const QString &tip, F &&fn)
@@ -418,11 +602,18 @@ private:
         const bool paused = cocodebug_is_paused(m_dbg) != 0;
         /* Rebuild when the engine has stopped somewhere new, or when it has
          * just started running again and the panes need clearing. */
-        if (serial == m_seenSerial && paused == m_wasPaused)
+        if (serial == m_seenSerial && paused == m_wasPaused) {
+            /* the traffic twice a second, whether or not the machine stops */
+            if (m_tabs->currentIndex() == kTabFujinet &&
+                (!m_fujiClock.isValid() || m_fujiClock.elapsed() >= 500))
+                refreshFujinet(false);
             return;
+        }
         m_seenSerial = serial;
         m_wasPaused = paused;
         refresh(paused);
+        if (m_tabs->currentIndex() == kTabFujinet)
+            refreshFujinet(false);
     }
 
     void refresh(bool paused)
@@ -579,7 +770,16 @@ private:
         return s;
     }
 
+    cocosession *m_session;
     cocodebug *m_dbg;
+    QTabWidget *m_tabs = nullptr;
+    QLabel *m_fujiNote = nullptr;
+    QCheckBox *m_fujiHideReady = nullptr;
+    QPlainTextEdit *m_fujiText = nullptr;
+    QPlainTextEdit *m_fujiState = nullptr;
+    int m_fujiCount = -1;
+    uint64_t m_fujiLast = 0;
+    QElapsedTimer m_fujiClock;
     QLabel *m_status = nullptr;
     QLabel *m_regs = nullptr;
     QLabel *m_locals = nullptr;
@@ -636,7 +836,7 @@ void show(QWidget *parent, cocosession *session)
         return;
     }
 
-    auto *w = new DebuggerDialog(parent, dbg);
+    auto *w = new DebuggerDialog(parent, session, dbg);
     w->setAttribute(Qt::WA_DeleteOnClose);
     g_window = w;
     w->show();

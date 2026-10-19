@@ -271,6 +271,8 @@ int  cocosession_render_audio(cocosession *s, int16_t *out, int nsamples);
 
 /* ---- FujiNet -------------------------------------------------------------*/
 int         cocosession_fujinet_running(const cocosession *s);
+/* 1 while the emulator is connected to FujiNet over the Becker port. */
+int         cocosession_fujinet_link(const cocosession *s);
 const char *cocosession_fujinet_webui_url(const cocosession *s);
 /* Copies the most recent FujiNet console output (NUL-terminated) into dst;
  * returns the number of bytes written (excluding the NUL). */
@@ -310,8 +312,9 @@ const char *cocosession_data_path(const cocosession *s);
 const char *cocosession_sd_path(const cocosession *s);
 
 /* ---- debugger ------------------------------------------------------------
- * Lazily created; engaging it (breakpoints/pause) switches the emulator loop
- * to the instruction-stepped core path. See cocodebug.h. */
+ * Created when the session starts (its FujiNet trace runs from then), or
+ * here if it has not; engaging it (breakpoints/pause) switches the emulator
+ * loop to the instruction-stepped core path. See cocodebug.h. */
 cocodebug *cocosession_debugger(cocosession *s);
 
 #ifdef __cplusplus

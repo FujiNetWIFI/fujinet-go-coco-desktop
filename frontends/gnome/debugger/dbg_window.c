@@ -11,6 +11,10 @@
  * changes, which costs one integer read per frame while open and nothing at
  * all when closed.
  *
+ * Two tabs: the 6809 view, and FujiNet's DriveWire traffic on the Becker
+ * port (core/debugger/dwtrace.h), which also refreshes twice a second while
+ * the machine runs.
+ *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -31,6 +35,15 @@
  * stop, the same way the disassembly list is. */
 #define MEM_BYTES_PER_ROW 16
 #define MEM_ROWS 16
+
+/* The tabs, in order: the names COCO_DEBUGGER_TAB takes. */
+enum { TAB_CPU, TAB_FUJINET, TAB_COUNT };
+static const char *const k_tab_names[TAB_COUNT] = { "cpu", "fujinet" };
+static const char *const k_tab_labels[TAB_COUNT] = { "CPU", "FujiNet" };
+
+/* Entries the FujiNet tab asks for: all the engine keeps, plus the one in
+ * progress. */
+#define FUJI_TRACE_MAX 513
 
 typedef struct {
     GtkWindow *window;
@@ -69,6 +82,15 @@ typedef struct {
     uint64_t seen_serial;
     int was_paused;
     uint16_t mem_view_addr;
+
+    GtkNotebook *tabs;
+    GtkLabel *fuji_note;
+    GtkTextView *fuji_text;
+    GtkTextView *fuji_state;
+    GtkCheckButton *fuji_hide_ready;
+    int fuji_count;
+    uint64_t fuji_last;
+    gint64 fuji_refreshed_us;
 } DebuggerUI;
 
 /* The core's XRGB8888 is a uint32 0x00RRGGBB, so on a little-endian host the
@@ -365,6 +387,132 @@ static void refresh_video(DebuggerUI *ui)
     g_object_unref(texture);
 }
 
+/* ---- the FujiNet tab ----------------------------------------------------- */
+
+static GtkAdjustment *vadj(GtkTextView *view)
+{
+    GtkWidget *parent = gtk_widget_get_parent(GTK_WIDGET(view));
+    return GTK_IS_SCROLLED_WINDOW(parent)
+        ? gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(parent))
+        : NULL;
+}
+
+static gboolean at_end(GtkAdjustment *adj)
+{
+    return gtk_adjustment_get_value(adj) + gtk_adjustment_get_page_size(adj) >=
+           gtk_adjustment_get_upper(adj) - 2.0;
+}
+
+/* The log follows its end while its reader is there. New text grows the
+ * view only once it is laid out, so the end is pinned whenever the view's
+ * height changes; whether to follow is decided as text arrives. */
+static gboolean following(GtkTextView *view)
+{
+    return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(view), "follow")) != 0;
+}
+
+static void on_log_resized(GtkAdjustment *adj, gpointer view)
+{
+    if (following(view))
+        gtk_adjustment_set_value(adj, gtk_adjustment_get_upper(adj) -
+                                      gtk_adjustment_get_page_size(adj));
+}
+
+static void make_log(GtkTextView *view)
+{
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+    g_signal_connect(vadj(view), "changed", G_CALLBACK(on_log_resized), view);
+}
+
+/* Before new text: follow if the reader is at the end (or never looked). */
+static void log_note_reader(GtkTextView *view)
+{
+    GtkAdjustment *adj = vadj(view);
+    g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(
+        gtk_adjustment_get_page_size(adj) <= 0.0 || at_end(adj)));
+}
+
+/* Replaces a view's text where the reader left it (a refresh must not throw
+ * a scrolled view back to its top), or, following, at its end. */
+static void set_text_at(GtkTextView *view, const char *text, gboolean follow)
+{
+    GtkTextBuffer *b = gtk_text_view_get_buffer(view);
+    GtkAdjustment *adj = vadj(view);
+    g_autofree char *clean = g_utf8_make_valid(text, -1);
+    GtkTextMark *mark;
+    GtkTextIter it;
+    int top = 0;
+
+    if (!follow && adj && gtk_adjustment_get_value(adj) > 0.0) {
+        gtk_text_view_get_line_at_y(view, &it,
+                                    (int)gtk_adjustment_get_value(adj), NULL);
+        top = gtk_text_iter_get_line(&it);
+    }
+    gtk_text_buffer_set_text(b, clean, -1);
+    if (follow) {
+        g_object_set_data(G_OBJECT(view), "follow", GINT_TO_POINTER(1));
+        on_log_resized(adj, view);
+        return;
+    }
+    if (top <= 0)
+        return;
+    /* scroll_to_mark waits for the new text's layout */
+    gtk_text_buffer_get_iter_at_line(b, &it, top);
+    mark = gtk_text_buffer_create_mark(b, NULL, &it, TRUE);
+    gtk_text_view_scroll_to_mark(view, mark, 0.0, TRUE, 0.0, 0.0);
+    gtk_text_buffer_delete_mark(b, mark);
+}
+
+static void refresh_fujinet(DebuggerUI *ui, gboolean force)
+{
+    static coco_fuji_packet p[FUJI_TRACE_MAX];
+    char state[1024];
+    const int n = cocodebug_fujinet_trace(ui->dbg, p, FUJI_TRACE_MAX);
+    const gboolean hide =
+        gtk_check_button_get_active(ui->fuji_hide_ready);
+    GString *t;
+    int i, shown = 0;
+
+    if (!cocosession_fujinet_running(ui->session))
+        gtk_label_set_text(ui->fuji_note,
+                           "FujiNet is off (Preferences \xe2\x96\xb8 FujiNet).");
+    else
+        gtk_label_set_text(ui->fuji_note,
+                           cocosession_fujinet_link(ui->session)
+                               ? "FujiNet is on the Becker port, connected."
+                               : "FujiNet is on the Becker port, not "
+                                 "connected.");
+    cocodebug_fujinet_state(ui->dbg, state, sizeof(state));
+    set_text_at(ui->fuji_state, state, FALSE);
+    ui->fuji_refreshed_us = g_get_monotonic_time();
+
+    if (!force && n == ui->fuji_count &&
+        (n == 0 || p[n - 1].serial == ui->fuji_last))
+        return;
+    ui->fuji_count = n;
+    ui->fuji_last = n > 0 ? p[n - 1].serial : 0;
+    log_note_reader(ui->fuji_text);
+    t = g_string_new(NULL);
+    for (i = 0; i < n; i++) {
+        int k;
+        if (hide && cocodebug_fujinet_is_ready(&p[i]))
+            continue;
+        g_string_append_printf(t, "%s%s\n     ", shown++ ? "\n" : "",
+                               p[i].text);
+        for (k = 0; k < p[i].nbytes && k < (int)sizeof p[i].data; k++)
+            g_string_append_printf(t, "%02X ", p[i].data[k]);
+        if (p[i].nbytes > (int)sizeof p[i].data)
+            g_string_append(t, "\xe2\x80\xa6");
+    }
+    if (shown == 0)
+        g_string_append(t, n ? "(only READY probes since the trace was "
+                               "cleared)"
+                             : "(no DriveWire traffic since the trace was "
+                               "cleared)");
+    set_text_at(ui->fuji_text, t->str, force || following(ui->fuji_text));
+    g_string_free(t, TRUE);
+}
+
 static void refresh(DebuggerUI *ui)
 {
     const int paused = cocodebug_is_paused(ui->dbg);
@@ -393,6 +541,8 @@ static void refresh(DebuggerUI *ui)
         gtk_picture_set_paintable(ui->video, NULL);
     }
     ui->was_paused = paused;
+    if (gtk_notebook_get_current_page(ui->tabs) == TAB_FUJINET)
+        refresh_fujinet(ui, FALSE);
 }
 
 static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
@@ -413,8 +563,21 @@ static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
         cocodebug_is_paused(ui->dbg) != ui->was_paused) {
         ui->seen_serial = serial;
         refresh(ui);
+    } else if (gtk_notebook_get_current_page(ui->tabs) == TAB_FUJINET &&
+               g_get_monotonic_time() - ui->fuji_refreshed_us >= 500000) {
+        /* the traffic twice a second, whether or not the machine stops */
+        refresh_fujinet(ui, FALSE);
     }
     return G_SOURCE_CONTINUE;
+}
+
+static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num,
+                           gpointer user_data)
+{
+    (void)nb;
+    (void)page;
+    if (num == TAB_FUJINET)
+        refresh_fujinet(user_data, FALSE);
 }
 
 /* ---- actions ------------------------------------------------------------ */
@@ -445,6 +608,20 @@ static void on_clear_bp(GtkButton *b, gpointer u)
     (void)b;
     cocodebug_breakpoint_clear_all(ui->dbg);
     ui->seen_serial = 0; /* redraw the markers */
+}
+
+static void on_fuji_clear(GtkButton *b, gpointer u)
+{
+    DebuggerUI *ui = u;
+    (void)b;
+    cocodebug_fujinet_trace_clear(ui->dbg);
+    refresh_fujinet(ui, TRUE);
+}
+
+static void on_fuji_hide_ready(GtkCheckButton *b, gpointer u)
+{
+    (void)b;
+    refresh_fujinet(u, TRUE);
 }
 
 static void load_symbols_done(GObject *source, GAsyncResult *result,
@@ -677,6 +854,8 @@ static void on_closed(GtkWindow *window, gpointer user_data)
         gtk_widget_remove_tick_callback(GTK_WIDGET(ui->window), ui->tick_id);
         ui->tick_id = 0;
     }
+    /* The notebook outlives ui by a moment as the window goes. */
+    g_signal_handlers_disconnect_by_data(ui->tabs, ui);
     /* Closing the window releases the debugger: leaving it engaged would cost
      * the machine a hook call per instruction forever, and leaving it PAUSED
      * would look like the emulator had hung. */
@@ -699,13 +878,103 @@ static GtkWidget *tool_button(const char *label, const char *tooltip,
     return b;
 }
 
+static GtkWidget *mono_view(GtkTextView **out)
+{
+    GtkWidget *scroll = gtk_scrolled_window_new();
+    GtkWidget *view = gtk_text_view_new();
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(view), TRUE);
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(view), FALSE);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(view), 6);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), view);
+    gtk_widget_set_vexpand(scroll, TRUE);
+    gtk_widget_set_hexpand(scroll, TRUE);
+    *out = GTK_TEXT_VIEW(view);
+    return scroll;
+}
+
+static GtkWidget *title_label(const char *text)
+{
+    GtkWidget *l = gtk_label_new(text);
+    gtk_widget_add_css_class(l, "heading");
+    gtk_label_set_xalign(GTK_LABEL(l), 0);
+    return l;
+}
+
+static GtkWidget *build_fujinet(DebuggerUI *ui)
+{
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *hide = gtk_check_button_new_with_label("Hide READY probes");
+    GtkWidget *clear = gtk_button_new_with_label("Clear");
+
+    ui->fuji_note = GTK_LABEL(gtk_label_new(""));
+    gtk_widget_add_css_class(GTK_WIDGET(ui->fuji_note), "dim-label");
+    gtk_label_set_wrap(ui->fuji_note, TRUE);
+    gtk_label_set_xalign(ui->fuji_note, 0);
+    gtk_widget_set_hexpand(GTK_WIDGET(ui->fuji_note), TRUE);
+    ui->fuji_hide_ready = GTK_CHECK_BUTTON(hide);
+    gtk_check_button_set_active(ui->fuji_hide_ready, TRUE);
+    gtk_widget_set_tooltip_text(hide, "fujinet-lib asks E2 00 before every "
+                                      "call");
+    g_signal_connect(hide, "toggled", G_CALLBACK(on_fuji_hide_ready), ui);
+    g_signal_connect(clear, "clicked", G_CALLBACK(on_fuji_clear), ui);
+    gtk_box_append(GTK_BOX(row), GTK_WIDGET(ui->fuji_note));
+    gtk_box_append(GTK_BOX(row), hide);
+    gtk_box_append(GTK_BOX(row), clear);
+    gtk_box_append(GTK_BOX(left), title_label("DriveWire packets"));
+    gtk_box_append(GTK_BOX(left), row);
+    gtk_box_append(GTK_BOX(left), mono_view(&ui->fuji_text));
+    make_log(ui->fuji_text);
+
+    gtk_box_append(GTK_BOX(right), title_label("Becker port"));
+    gtk_box_append(GTK_BOX(right), mono_view(&ui->fuji_state));
+
+    gtk_paned_set_start_child(GTK_PANED(paned), left);
+    gtk_paned_set_end_child(GTK_PANED(paned), right);
+    gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_shrink_end_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_resize_end_child(GTK_PANED(paned), FALSE);
+    gtk_widget_set_size_request(left, 560, -1);
+    gtk_widget_set_size_request(right, 340, -1);
+    gtk_widget_set_margin_top(paned, 8);
+    gtk_widget_set_margin_bottom(paned, 8);
+    gtk_widget_set_margin_start(paned, 8);
+    gtk_widget_set_margin_end(paned, 8);
+    ui->fuji_count = -1;
+    return paned;
+}
+
+/* COCO_DEBUGGER_TAB: a tab's number or name ("cpu", "fujinet"), or the
+ * start of one, any case. */
+static int tab_from_env(void)
+{
+    const char *tab = g_getenv("COCO_DEBUGGER_TAB");
+    char *end;
+    long n;
+    int i;
+
+    if (!tab || !*tab)
+        return -1;
+    n = strtol(tab, &end, 10);
+    if (end != tab && *end == '\0')
+        return (n >= 0 && n < TAB_COUNT) ? (int)n : -1;
+    for (i = 0; i < TAB_COUNT; i++)
+        if (g_ascii_strncasecmp(tab, k_tab_names[i], strlen(tab)) == 0)
+            return i;
+    return -1;
+}
+
 void coco_debugger_show(GtkWindow *parent, cocosession *session)
 {
     DebuggerUI *ui;
     cocodebug *dbg;
     GtkWidget *box, *panes, *scroller, *regbox, *header, *bar, *mem_bar,
-              *mem_scroller, *src_box, *src_scroller;
+              *mem_scroller, *src_box, *src_scroller, *cpu_page;
     GtkEventController *keys;
+    int tab;
 
     if (g_ui) {
         gtk_window_present(g_ui->window);
@@ -895,13 +1164,28 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     gtk_widget_set_margin_bottom(mem_scroller, 6);
     gtk_widget_set_hexpand(mem_scroller, TRUE);
 
+    cpu_page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(cpu_page), bar);
+    gtk_box_append(GTK_BOX(cpu_page), panes);
+    gtk_box_append(GTK_BOX(cpu_page),
+                   gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+    gtk_box_append(GTK_BOX(cpu_page), mem_bar);
+    gtk_box_append(GTK_BOX(cpu_page), mem_scroller);
+
+    ui->tabs = GTK_NOTEBOOK(gtk_notebook_new());
+    gtk_notebook_append_page(ui->tabs, cpu_page,
+                             gtk_label_new(k_tab_labels[TAB_CPU]));
+    gtk_notebook_append_page(ui->tabs, build_fujinet(ui),
+                             gtk_label_new(k_tab_labels[TAB_FUJINET]));
+    gtk_widget_set_vexpand(GTK_WIDGET(ui->tabs), TRUE);
+    tab = tab_from_env();
+    if (tab >= 0)
+        gtk_notebook_set_current_page(ui->tabs, tab);
+    g_signal_connect(ui->tabs, "switch-page", G_CALLBACK(on_switch_page), ui);
+
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_append(GTK_BOX(box), header);
-    gtk_box_append(GTK_BOX(box), bar);
-    gtk_box_append(GTK_BOX(box), panes);
-    gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
-    gtk_box_append(GTK_BOX(box), mem_bar);
-    gtk_box_append(GTK_BOX(box), mem_scroller);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(ui->tabs));
     adw_window_set_content(ADW_WINDOW(ui->window), box);
 
     keys = gtk_event_controller_key_new();
