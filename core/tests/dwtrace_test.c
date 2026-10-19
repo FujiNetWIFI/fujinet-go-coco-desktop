@@ -18,13 +18,17 @@
 
 static int failures;
 static coco_fuji_packet pk[DWTRACE_MAX + 8];
+static int got; /* what the last get() returned */
 
 static void ok(const char *what, int cond)
 {
+    int i;
     if (cond) {
         printf("ok   %s\n", what);
     } else {
         printf("FAIL %s\n", what);
+        for (i = 0; i < got && i < 8; i++)
+            printf("     [%d] %s\n", i, pk[i].text);
         failures++;
     }
 }
@@ -44,7 +48,7 @@ static void feed_slowly(dwtrace *t, int dir, const uint8_t *b, size_t n)
 
 static int get(dwtrace *t)
 {
-    return dwtrace_get(t, pk, DWTRACE_MAX + 8);
+    return got = dwtrace_get(t, pk, DWTRACE_MAX + 8);
 }
 
 static int has(const coco_fuji_packet *p, const char *s)
