@@ -256,6 +256,12 @@ target_include_directories(cocosession
 # from other max-sized buffers; snprintf truncation is the intended clamp
 # there, not a bug.
 target_compile_options(cocosession PRIVATE -Wall -Wextra -Wno-format-truncation)
+# GCC 13's loop unswitching miscompiles dwtrace.c at -O3 (Ubuntu 24.04's
+# 13.3: a TIME request reads as cut short and its reply as orphaned).
+# GCC 14 and clang build it correctly.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 14)
+  set_source_files_properties(debugger/dwtrace.c PROPERTIES COMPILE_OPTIONS -fno-unswitch-loops)
+endif()
 target_compile_definitions(cocosession PRIVATE
   _GNU_SOURCE
   COCO_DEV_FUJINET_OUT="${CMAKE_SOURCE_DIR}/tools/fujinet/work/out"
