@@ -19,7 +19,11 @@
 
 #include "prefs.h"
 
+#include <string.h>
+
 #include "window.h"
+
+#define MAX_ROM_ROWS 8
 
 static const char *const aspect_names[] = {"TV (4:3)", "Square pixels",
                                            "Integer scale", NULL};
@@ -29,6 +33,7 @@ typedef struct {
     cocosession *session;
     void (*display_changed)(CocoWindow *window);
     gboolean session_dirty; /* a start-time option changed */
+    GtkWidget *rom_rows[MAX_ROM_ROWS];
 } PrefsState;
 
 typedef struct {
@@ -137,6 +142,109 @@ static GtkWidget *switch_row(PrefsState *state, const char *title,
     return row;
 }
 
+/* ---- the ROMs page ------------------------------------------------------- */
+
+static const char *const ROM_EXTS[] = { "zip", "rom", "bin", NULL };
+
+static void refresh_rows(PrefsState *st)
+{
+    int r;
+    for (r = 0; r < cocosession_rom_item_count() && r < MAX_ROM_ROWS; r++)
+        if (st->rom_rows[r])
+            adw_action_row_set_subtitle(
+                ADW_ACTION_ROW(st->rom_rows[r]),
+                cocosession_rom_item_available(st->session, r)
+                    ? "Imported" : "Not imported");
+}
+
+static void on_rom_chosen(GObject *src, GAsyncResult *res, gpointer user_data)
+{
+    PrefsState *st = user_data;
+    gboolean folder = GPOINTER_TO_INT(g_object_get_data(src, "coco-folder"));
+    g_autoptr(GFile) f =
+        folder ? gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(src),
+                                                      res, NULL)
+               : gtk_file_dialog_open_finish(GTK_FILE_DIALOG(src), res, NULL);
+    g_autofree char *path = f ? g_file_get_path(f) : NULL;
+    char msg[1024];
+
+    if (!path)
+        return;
+    cocosession_rom_import(st->session, path, msg, sizeof msg);
+    coco_window_toast(st->window, msg);
+    refresh_rows(st);
+}
+
+static void on_rom_import(GtkButton *b, gpointer user_data)
+{
+    PrefsState *st = user_data;
+    gboolean folder =
+        GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "coco-folder"));
+    GtkFileDialog *dlg = coco_file_dialog(
+        folder ? "Import BIOS from a Folder" : "Import BIOS",
+        "BIOS images and ROM sets", ROM_EXTS);
+
+    g_object_set_data(G_OBJECT(dlg), "coco-folder", GINT_TO_POINTER(folder));
+    if (folder)
+        gtk_file_dialog_select_folder(dlg, GTK_WINDOW(st->window), NULL,
+                                      on_rom_chosen, st);
+    else
+        gtk_file_dialog_open(dlg, GTK_WINDOW(st->window), NULL, on_rom_chosen,
+                             st);
+    g_object_unref(dlg);
+}
+
+static AdwPreferencesPage *build_roms_page(PrefsState *st)
+{
+    AdwPreferencesPage *page = ADW_PREFERENCES_PAGE(adw_preferences_page_new());
+    AdwPreferencesGroup *group = NULL;
+    const char *last = NULL;
+    char desc[1200];
+    int r;
+
+    adw_preferences_page_set_title(page, "ROMs");
+    adw_preferences_page_set_name(page, "ROMs");
+    adw_preferences_page_set_icon_name(page, "media-flash-symbolic");
+    for (r = 0; r < cocosession_rom_item_count() && r < MAX_ROM_ROWS; r++) {
+        const coco_rom_item *item = cocosession_rom_item(r);
+        GtkWidget *row;
+        if (!last || strcmp(last, item->group) != 0) {
+            group = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
+            adw_preferences_group_set_title(group, item->group);
+            if (!last) {
+                GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+                GtkWidget *files = gtk_button_new_with_label("Import\xe2\x80\xa6");
+                GtkWidget *dir =
+                    gtk_button_new_with_label("Import a Folder\xe2\x80\xa6");
+                g_snprintf(desc, sizeof desc,
+                    "The CoCo's system ROMs are not part of the app. Import "
+                    "them from files, a zip or a folder (MAME's coco and "
+                    "coco3 sets work); they are recognised by their "
+                    "checksums. Kept in %s.",
+                    cocosession_roms_path(st->session));
+                adw_preferences_group_set_description(group, desc);
+                g_object_set_data(G_OBJECT(dir), "coco-folder",
+                                  GINT_TO_POINTER(1));
+                g_signal_connect(files, "clicked", G_CALLBACK(on_rom_import),
+                                 st);
+                g_signal_connect(dir, "clicked", G_CALLBACK(on_rom_import), st);
+                gtk_widget_set_valign(files, GTK_ALIGN_CENTER);
+                gtk_widget_set_valign(dir, GTK_ALIGN_CENTER);
+                gtk_box_append(GTK_BOX(box), files);
+                gtk_box_append(GTK_BOX(box), dir);
+                adw_preferences_group_set_header_suffix(group, box);
+            }
+            adw_preferences_page_add(page, group);
+            last = item->group;
+        }
+        row = adw_action_row_new();
+        adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), item->name);
+        adw_preferences_group_add(group, row);
+        st->rom_rows[r] = row;
+    }
+    return page;
+}
+
 static void prefs_closed(GtkWidget *dialog, gpointer user_data)
 {
     PrefsState *state = user_data;
@@ -145,6 +253,8 @@ static void prefs_closed(GtkWidget *dialog, gpointer user_data)
         coco_window_restart_session(state->window);
         coco_window_toast(state->window,
                           "FujiNet options applied (session restarted)");
+    } else {
+        coco_window_start(state->window);   /* a ROM imported here boots it */
     }
     g_free(state);
 }
@@ -249,6 +359,8 @@ void coco_prefs_show(CocoWindow *parent, cocosession *session,
     adw_preferences_page_add(page, display);
     adw_preferences_page_add(page, runtime);
     adw_preferences_dialog_add(dialog, page);
+    adw_preferences_dialog_add(dialog, build_roms_page(state));
+    refresh_rows(state);
     g_signal_connect(dialog, "closed", G_CALLBACK(prefs_closed), state);
     adw_dialog_present(ADW_DIALOG(dialog), GTK_WIDGET(parent));
 }

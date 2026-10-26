@@ -18,6 +18,13 @@ G_DECLARE_FINAL_TYPE(CocoWindow, coco_window, COCO, WINDOW,
 GtkWidget *coco_window_new(AdwApplication *app, cocosession *session);
 void coco_window_toast(CocoWindow *self, const char *message);
 void coco_window_restart_session(CocoWindow *self);
+/* The picture, or the No-BIOS page when the machine has no ROMs to boot. */
+void coco_window_show_page(CocoWindow *self);
+/* Starts the machine if it isn't running and its ROMs are there. */
+void coco_window_start(CocoWindow *self);
+/* A file chooser with a "these" filter (suffixes, any case) and All files. */
+GtkFileDialog *coco_file_dialog(const char *title, const char *filter_name,
+                                const char *const *exts);
 
 /* main.c: the icon name to use, which differs between an installed app and
  * one running out of the build tree. */

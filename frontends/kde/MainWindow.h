@@ -11,6 +11,7 @@
 #include "cocosession.h"
 
 class DisplayWidget;
+class QStackedWidget;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -23,11 +24,16 @@ private:
     void applyDisplaySettings();
     void restartSession();
     void importDiskImage();
-    void importSystemRoms();
+    void importBios(bool folder);
+    QWidget *buildNoBiosPage();
+    void showPage();
+    void start();
     void status(const QString &message);
 
     cocosession *m_session;
     DisplayWidget *m_display;
+    QStackedWidget *m_stack;
+    QWidget *m_noBios;
     /* Rebuilt when the machine changes: a CoCo 2 has no RGB input, so that
      * entry has to disappear rather than sit there rendering a blank screen. */
     QMenu *m_tvInputMenu = nullptr;

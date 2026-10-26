@@ -18,7 +18,7 @@
  *                  WITH_COCO_ROMS=ON build, which must not be redistributed.
  *
  * coco_embedded_system_roms is 1 in exactly that build; a frontend can use it
- * to decide whether to offer "Import System ROMs...". See COMPLIANCE.md.
+ * to decide whether to offer "Import BIOS...". See COMPLIANCE.md.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later

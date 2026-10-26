@@ -254,7 +254,7 @@ static void *emu_thread_main(void *arg)
             if (!roms_present_for_machine(s->roms_dir, s->opts.machine))
                 session_set_error(s,
                     "No CoCo system ROMs found in %s.\n\n"
-                    "Use Media > Import System ROMs... to supply your own "
+                    "Use Machine > Import BIOS... to supply your own "
                     "(or set COCO_ROM_DIR to point at a folder that already "
                     "has them).", s->roms_dir);
             else
@@ -722,11 +722,20 @@ cocodebug *cocosession_debugger(cocosession *s)
 /** Media import                                                           **/
 /****************************************************************************/
 
+/* The last path component, whichever separator the host's file dialog used. */
+static const char *path_basename(const char *path)
+{
+    const char *a = strrchr(path, '/');
+    const char *b = strrchr(path, '\\');
+    if (b && (!a || b > a)) a = b;
+    return a ? a + 1 : path;
+}
+
 static const char *path_ext(const char *path)
 {
-    const char *dot = strrchr(path, '.');
-    const char *slash = strrchr(path, '/');
-    if (!dot || (slash && dot < slash)) return "";
+    const char *base = path_basename(path);
+    const char *dot = strrchr(base, '.');
+    if (!dot) return "";
     return dot + 1;
 }
 
@@ -735,29 +744,6 @@ static int ext_is(const char *ext, const char *want)
     for (; *ext && *want; ext++, want++)
         if ((*ext | 0x20) != *want) return 0;
     return *ext == '\0' && *want == '\0';
-}
-
-int cocosession_import_rom(cocosession *s, const char *src_path,
-                           char *dest_out, int dest_sz)
-{
-    const char *base = strrchr(src_path, '/');
-    char dst[COCO_PATH_MAX];
-
-    base = base ? base + 1 : src_path;
-    if (!*base) {
-        session_set_error(s, "Not a file: %s", src_path);
-        return -1;
-    }
-
-    mkdir_p(s->roms_dir);
-    snprintf(dst, sizeof(dst), "%s/%s", s->roms_dir, base);
-    if (copy_file(src_path, dst) != 0) {
-        session_set_error(s, "Could not copy %s to %s", src_path, dst);
-        return -1;
-    }
-    if (dest_out && dest_sz > 0)
-        snprintf(dest_out, (size_t)dest_sz, "%s", dst);
-    return 0;
 }
 
 int cocosession_import_media(cocosession *s, const char *src_path,
@@ -771,12 +757,11 @@ int cocosession_import_media(cocosession *s, const char *src_path,
     };
     static const char *const k_cart_exts[] = { "rom", "ccc", NULL };
     const char *ext = path_ext(src_path);
-    const char *base = strrchr(src_path, '/');
+    const char *base = path_basename(src_path);
     const char *dir = NULL;
     char dst[COCO_PATH_MAX];
     int i;
 
-    base = base ? base + 1 : src_path;
     for (i = 0; k_disk_exts[i] && !dir; i++)
         if (ext_is(ext, k_disk_exts[i])) dir = s->fujinet_sd;
     for (i = 0; k_cart_exts[i] && !dir; i++)

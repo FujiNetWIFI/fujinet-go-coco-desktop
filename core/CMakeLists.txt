@@ -235,6 +235,8 @@ add_library(cocosession STATIC
   src/session.c
   src/settings.c
   src/paths.c
+  src/roms.c
+  src/zipread.c
   src/input_map.c
   src/audio_sdl.c
   src/gamepad_sdl.c
@@ -269,13 +271,22 @@ target_compile_definitions(cocosession PRIVATE
   COCO_INSTALL_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/fujinet-go-coco"
 )
 
+# zlib inflates the deflated entries of a BIOS zip (MAME's coco/coco3 sets).
+# The Windows exe stays one folder of system DLLs plus SDL3.dll (the release
+# workflow checks its import table), so it takes zlib's static archive.
+if(WIN32)
+  set(ZLIB_USE_STATIC_LIBS ON)
+endif()
+find_package(ZLIB REQUIRED)
+
 target_link_libraries(cocosession PUBLIC
   xroar_core
   SDL3::SDL3
   Threads::Threads
 )
+target_link_libraries(cocosession PRIVATE ZLIB::ZLIB)
 if(WIN32)
-  target_link_libraries(cocosession PUBLIC ws2_32)
+  target_link_libraries(cocosession PUBLIC ws2_32 winmm)
 else()
   target_link_libraries(cocosession PUBLIC dl m)
 endif()
@@ -320,6 +331,18 @@ target_compile_definitions(csrcinfo_test PRIVATE
 add_executable(dwtrace_test tests/dwtrace_test.c)
 target_link_libraries(dwtrace_test cocosession)
 target_include_directories(dwtrace_test PRIVATE debugger)
+
+# ROM import from a file, a zip and a folder, with forged images that carry each
+# ROM's size and CRC32 (so CI needs no Tandy ROM).
+add_executable(rom_import_test tests/rom_import_test.c)
+target_link_libraries(rom_import_test cocosession ZLIB::ZLIB)
+add_test(NAME rom_import_test COMMAND rom_import_test)
+
+# Stop/start in one process, and an import into a running machine. Run under
+# ASan to see what it guards (XRoar's second xroar_init).
+add_executable(restart_test tests/restart_test.c)
+target_link_libraries(restart_test cocosession ZLIB::ZLIB)
+add_test(NAME restart_test COMMAND restart_test)
 
 add_executable(session_test tests/session_test.c)
 target_link_libraries(session_test cocosession)

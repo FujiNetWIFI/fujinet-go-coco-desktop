@@ -54,7 +54,10 @@ static void on_activate(AdwApplication *app, gpointer user_data)
             return;
         }
         cocosession_default_opts(g_session, &opts);
-        if (cocosession_start(g_session, &opts) != 0)
+        /* Without ROMs the window opens on its No-BIOS page instead. */
+        if (cocosession_has_system_roms(g_session,
+                                        cocosession_machine(g_session)) &&
+            cocosession_start(g_session, &opts) != 0)
             g_printerr("session start: %s\n",
                        cocosession_last_error(g_session));
     }

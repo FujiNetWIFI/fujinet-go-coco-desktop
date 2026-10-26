@@ -113,7 +113,7 @@ modules:
       # freely licensed (see COMPLIANCE.md) -- every artifact this repository
       # publishes, this flatpak included, embeds only the freely
       # redistributable HDB-DOS pair and leaves the rest to
-      # Media > Import System ROMs....
+      # Machine > Import BIOS....
       - -DWITH_COCO_ROMS=OFF
     build-options:
       env:

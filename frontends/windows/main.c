@@ -2,9 +2,11 @@
  * FujiNet Go CoCo -- native Win32 frontend.
  *
  * Mirrors the GNOME/KDE frontends over the shared cocosession API: a
- * GDI-blitted display letterboxed to the chosen aspect, a present thread
- * that feeds the session's vsync phase-lock from DwmFlush (the Windows
- * analog of the GTK frame clock / Qt's own timer), full keyboard mapping,
+ * Direct3D 11 display (display.c; GDI as the fallback) letterboxed to the
+ * chosen aspect, whose render thread feeds the session's vsync phase-lock
+ * (the Windows analog of the GTK frame clock / Qt's own timer), a No-BIOS
+ * page in the picture's place until the app has the system ROMs, full
+ * keyboard mapping,
  * a menu bar (Machine/TV input/Artifact Colour/CPU are live radio groups
  * built from the session's own *_name() tables, exactly like GNOME's
  * radio_menu() helper), media import, and the FujiNet configuration
@@ -19,9 +21,8 @@
  * comment for the debugger side of what differs. The main differences
  * here: cocosession_copy_frame reports a DYNAMIC frame size (up to
  * COCOSESSION_FB_MAX_WIDTH x MAX_HEIGHT), not a fixed one, and its
- * XRGB8888 pixels are already GDI's BI_RGB 32bpp byte order on a
- * little-endian host, so there is no RGB565->BGRA conversion loop to
- * carry over; keyboard input is forwarded directly via cocosession_key
+ * XRGB8888 pixels need no RGB565->BGRA conversion loop (display.c
+ * uploads them as they are); keyboard input is forwarded directly via cocosession_key
  * (raw keysym/unicode per keystroke) rather than ADAM's single-byte
  * pre-translated model, so it is rebuilt rather than ported; CoCo has no
  * equivalent of ADAM's Ctrl+digit ColecoVision keypad trick, so that is
@@ -32,19 +33,20 @@
  */
 
 #include <windows.h>
+#include <commctrl.h>
 #include <commdlg.h>
-#include <dwmapi.h>
+#include <objbase.h>
 #include <shellapi.h>
 
-#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "cocosession.h"
 #include "debugger/dbg_window.h"
+#include "display.h"
+#include "prefs.h"
 #include "resource.h"
 
 static cocosession *g_session;
@@ -53,139 +55,193 @@ static HMENU g_menu;
 static HWND g_log_window;
 static HWND g_log_edit;
 
-/* Frame hand-off: the present thread copies the latest frame under this
- * lock (cocosession_copy_frame writes straight into g_frame -- no
- * conversion, see the file comment); WM_PAINT blits it. Allocated at the
- * session's maximum since the actual size changes at runtime with the
- * video mode. */
-static CRITICAL_SECTION g_fb_lock;
-static uint32_t g_frame[COCOSESSION_FB_MAX_WIDTH * COCOSESSION_FB_MAX_HEIGHT];
-static int g_fb_w, g_fb_h;
-static uint64_t g_serial;
-
-static pthread_t g_present_thread;
-static volatile int g_present_run;
+static HWND g_display;
+static HWND g_nobios, g_bios_title, g_bios_text, g_bios_files, g_bios_folder;
+static HFONT g_ui_font, g_title_font;
+static HICON g_big_icon;
+static int g_dpi = 96;
 static int g_aspect_mode;
 static int g_smooth;
 static int g_fullscreen;
 static WINDOWPLACEMENT g_prev_placement = {sizeof(g_prev_placement)};
 
-static int64_t monotonic_ns(void)
+#define S(v) MulDiv((v), g_dpi, 96)
+
+static void start_machine(void);
+
+/* ---- the No-BIOS page ------------------------------------------------------
+ * Shown in the picture's place while the machine is not running for want of
+ * its system ROMs: a title, what to do, and the two import buttons, centred
+ * in a child window that covers the client. */
+
+enum { IDC_BIOS_FILES = 240, IDC_BIOS_FOLDER };
+
+static const char k_nobios_title[] = "No CoCo BIOS";
+static const char k_nobios_text[] =
+    "The CoCo needs its system ROMs (BASIC), which are not part of the app. "
+    "Import the ones you have -- a file, a zip such as MAME's coco and coco3 "
+    "sets, or a folder -- and the CoCo starts.";
+
+static int need_bios(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+    return !cocosession_is_running(g_session) &&
+           !cocosession_has_system_roms(g_session, cocosession_machine(g_session));
 }
 
-/* ---- present thread: vsync pacing + frame hand-off ------------------------ */
-
-static void *present_main(void *arg)
+static int text_height(HFONT font, const char *text, int width)
 {
-    (void)arg;
-    while (g_present_run) {
-        BOOL composited = FALSE;
-        DwmIsCompositionEnabled(&composited);
-        if (composited && SUCCEEDED(DwmFlush())) {
-            /* DwmFlush returned at the compositor's vsync. */
-        } else {
-            Sleep(16); /* no DWM composition (RDP, safe mode): wall clock */
-        }
-        cocosession_notify_vsync(g_session, monotonic_ns());
-
-        EnterCriticalSection(&g_fb_lock);
-        {
-            int w = 0, h = 0;
-            int got = cocosession_copy_frame(g_session, g_frame, &g_serial,
-                                             &w, &h);
-            if (got) {
-                g_fb_w = w;
-                g_fb_h = h;
-            }
-            LeaveCriticalSection(&g_fb_lock);
-            if (got)
-                InvalidateRect(g_hwnd, NULL, FALSE);
-        }
-    }
-    return NULL;
+    HDC dc = GetDC(g_hwnd);
+    HGDIOBJ old = SelectObject(dc, font);
+    RECT r = {0, 0, width, 0};
+    DrawTextA(dc, text, -1, &r, DT_CALCRECT | DT_WORDBREAK | DT_CENTER | DT_NOPREFIX);
+    SelectObject(dc, old);
+    ReleaseDC(g_hwnd, dc);
+    return r.bottom - r.top;
 }
 
-/* ---- display --------------------------------------------------------------
- * dest_rect and paint both read g_fb_w/g_fb_h fresh each time rather than
- * caching them, since the video mode -- and so the frame's own aspect --
- * can change at runtime (a CoCo 3 GIME mode is wider than a CoCo 1/2 VDG
- * one). */
-
-static RECT dest_rect(int cw, int ch, int fb_w, int fb_h)
+static int button_width(const char *text)
 {
-    double dw, dh;
-    RECT r;
-    if (fb_w <= 0 || fb_h <= 0) {
-        r.left = r.top = r.right = r.bottom = 0;
-        return r;
-    }
-    if (g_aspect_mode == 2) { /* integer scale */
-        int scale = (cw / fb_w < ch / fb_h) ? cw / fb_w : ch / fb_h;
-        if (scale < 1) scale = 1;
-        dw = scale * fb_w;
-        dh = scale * fb_h;
-    } else {
-        /* 0 = TV 4:3 (the default), 1 = square pixels (the frame's own
-         * aspect) -- matching the GNOME frontend's own convention
-         * (frontends/gnome/display.h's CocoAspectMode; "aspect_mode" is
-         * just a plain settings int, not an enum cocosession.h itself
-         * defines, so nothing enforces this across frontends except doing
-         * it the same way everywhere), not a fixed "0 = native" the way
-         * ADAM's own aspect_mode happens to read. */
-        double aspect =
-            g_aspect_mode == 0 ? 4.0 / 3.0 : (double)fb_w / fb_h;
-        if ((double)cw / ch > aspect) {
-            dh = ch;
-            dw = ch * aspect;
-        } else {
-            dw = cw;
-            dh = cw / aspect;
-        }
-    }
-    r.left = (LONG)((cw - dw) / 2);
-    r.top = (LONG)((ch - dh) / 2);
-    r.right = r.left + (LONG)dw;
-    r.bottom = r.top + (LONG)dh;
-    return r;
+    HDC dc = GetDC(g_hwnd);
+    HGDIOBJ old = SelectObject(dc, g_ui_font);
+    SIZE sz = {0, 0};
+    GetTextExtentPoint32A(dc, text, (int)strlen(text), &sz);
+    SelectObject(dc, old);
+    ReleaseDC(g_hwnd, dc);
+    return sz.cx + S(28) < S(80) ? S(80) : sz.cx + S(28);
 }
 
-static void paint(HWND hwnd)
+static RECT g_icon_rect;
+
+static void nobios_layout(int aw, int ah)
 {
-    PAINTSTRUCT ps;
-    HDC hdc = BeginPaint(hwnd, &ps);
-    RECT client;
-    BITMAPINFO bmi;
-    RECT d;
-    int fb_w, fb_h;
+    const int width = aw - S(48) < S(560) ? aw - S(48) : S(560);
+    const int icon = S(64), bh = S(32);
+    const int title_h = text_height(g_title_font, k_nobios_title, width);
+    const int desc_h = text_height(g_ui_font, k_nobios_text, width);
+    const int bw1 = button_width("Import BIOS"), bw2 = button_width("Import a Folder");
+    const int total = icon + S(16) + title_h + S(10) + desc_h + S(24) + bh;
+    const int x0 = (aw - width) / 2, cx = aw / 2;
+    int y = (ah - total) / 2;
 
-    GetClientRect(hwnd, &client);
-    FillRect(hdc, &client, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    if (y < S(8)) y = S(8);
+    SetRect(&g_icon_rect, cx - icon / 2, y, cx + icon / 2, y + icon);
+    y += icon + S(16);
+    MoveWindow(g_bios_title, x0, y, width, title_h, TRUE);
+    y += title_h + S(10);
+    MoveWindow(g_bios_text, x0, y, width, desc_h, TRUE);
+    y += desc_h + S(24);
+    MoveWindow(g_bios_files, cx - (bw1 + S(12) + bw2) / 2, y, bw1, bh, TRUE);
+    MoveWindow(g_bios_folder, cx - (bw1 + S(12) + bw2) / 2 + bw1 + S(12), y, bw2, bh,
+               TRUE);
+    InvalidateRect(g_nobios, NULL, TRUE);
+}
 
-    EnterCriticalSection(&g_fb_lock);
-    fb_w = g_fb_w;
-    fb_h = g_fb_h;
-    if (fb_w > 0 && fb_h > 0) {
-        memset(&bmi, 0, sizeof(bmi));
-        bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
-        bmi.bmiHeader.biWidth = fb_w;
-        bmi.bmiHeader.biHeight = -fb_h; /* top-down */
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        d = dest_rect(client.right, client.bottom, fb_w, fb_h);
-        SetStretchBltMode(hdc, g_smooth ? HALFTONE : COLORONCOLOR);
-        StretchDIBits(hdc, d.left, d.top, d.right - d.left, d.bottom - d.top,
-                      0, 0, fb_w, fb_h, g_frame, &bmi, DIB_RGB_COLORS,
-                      SRCCOPY);
+static LRESULT CALLBACK nobios_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_SIZE:
+        nobios_layout(LOWORD(lp), HIWORD(lp));
+        return 0;
+    case WM_COMMAND:
+        SendMessageA(g_hwnd, WM_COMMAND, LOWORD(wp), 0); /* the buttons */
+        return 0;
+    case WM_CTLCOLORSTATIC: {
+        HDC dc = (HDC)wp;
+        SetBkColor(dc, GetSysColor(COLOR_WINDOW));
+        SetTextColor(dc, GetSysColor((HWND)lp == g_bios_text ? COLOR_GRAYTEXT
+                                                             : COLOR_WINDOWTEXT));
+        return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
     }
-    LeaveCriticalSection(&g_fb_lock);
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        if (g_big_icon)
+            DrawIconEx(dc, g_icon_rect.left, g_icon_rect.top, g_big_icon,
+                       g_icon_rect.right - g_icon_rect.left,
+                       g_icon_rect.bottom - g_icon_rect.top, 0, NULL, DI_NORMAL);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND: {
+        RECT r;
+        GetClientRect(hwnd, &r);
+        FillRect((HDC)wp, &r, GetSysColorBrush(COLOR_WINDOW));
+        return 1;
+    }
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
 
-    EndPaint(hwnd, &ps);
+static void make_fonts(void)
+{
+    NONCLIENTMETRICSA ncm;
+    LOGFONTA lf;
+
+    memset(&ncm, 0, sizeof(ncm));
+    ncm.cbSize = sizeof(ncm);
+    if (SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+        lf = ncm.lfMessageFont;
+    else
+        GetObjectA(GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
+    g_ui_font = CreateFontIndirectA(&lf);
+    lf.lfHeight = lf.lfHeight * 8 / 5;
+    lf.lfWeight = FW_BOLD;
+    g_title_font = CreateFontIndirectA(&lf);
+}
+
+static void create_nobios(HINSTANCE inst)
+{
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = nobios_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = "CocoNoBios";
+    RegisterClassA(&wc);
+
+    make_fonts();
+    g_big_icon = (HICON)LoadImageA(inst, MAKEINTRESOURCEA(IDI_APPICON), IMAGE_ICON,
+                                   S(64), S(64), LR_DEFAULTCOLOR);
+    g_nobios = CreateWindowA("CocoNoBios", "", WS_CHILD | WS_CLIPCHILDREN, 0, 0, 1,
+                             1, g_hwnd, NULL, inst, NULL);
+    g_bios_title = CreateWindowA("STATIC", k_nobios_title,
+                                 WS_CHILD | WS_VISIBLE | SS_CENTER | SS_NOPREFIX, 0,
+                                 0, 1, 1, g_nobios, NULL, inst, NULL);
+    g_bios_text = CreateWindowA("STATIC", k_nobios_text,
+                                WS_CHILD | WS_VISIBLE | SS_CENTER | SS_NOPREFIX, 0, 0,
+                                1, 1, g_nobios, NULL, inst, NULL);
+    g_bios_files = CreateWindowA("BUTTON", "Import BIOS",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 1, 1,
+                                 g_nobios, (HMENU)(INT_PTR)IDC_BIOS_FILES, inst, NULL);
+    g_bios_folder = CreateWindowA("BUTTON", "Import a Folder",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 1, 1,
+                                  g_nobios, (HMENU)(INT_PTR)IDC_BIOS_FOLDER, inst,
+                                  NULL);
+    SendMessageA(g_bios_title, WM_SETFONT, (WPARAM)g_title_font, TRUE);
+    SendMessageA(g_bios_text, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_bios_files, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_bios_folder, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+}
+
+/* ---- display ------------------------------------------------------------- */
+
+/* The picture, or the No-BIOS page, fills the client. */
+static void layout_display(void)
+{
+    RECT rc;
+    if (!g_display)
+        return;
+    GetClientRect(g_hwnd, &rc);
+    MoveWindow(g_display, 0, 0, rc.right, rc.bottom, TRUE);
+    MoveWindow(g_nobios, 0, 0, rc.right, rc.bottom, TRUE);
+}
+
+static void show_page(void)
+{
+    const int bios = !need_bios();
+    ShowWindow(g_display, bios ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_nobios, bios ? SW_HIDE : SW_SHOW);
+    layout_display();
 }
 
 /* ---- keyboard --------------------------------------------------------------
@@ -330,14 +386,32 @@ static void on_key(HWND hwnd, WPARAM vk, LPARAM lp, int down)
 
 /* ---- menu actions ---------------------------------------------------------- */
 
-static void restart_session(void)
+static void start_session(void)
 {
     cocosession_start_opts opts;
-    cocosession_stop(g_session);
     cocosession_default_opts(g_session, &opts);
     if (cocosession_start(g_session, &opts) != 0)
         MessageBoxA(g_hwnd, cocosession_last_error(g_session),
                     "FujiNet Go CoCo", MB_ICONWARNING);
+}
+
+/* Without the system ROMs there is nothing to start: the No-BIOS page shows. */
+static void restart_session(void)
+{
+    cocosession_stop(g_session);
+    if (cocosession_has_system_roms(g_session, cocosession_machine(g_session)))
+        start_session();
+    show_page();
+}
+
+/* After an import: the core rebuilt a running machine in place; one that
+ * could not start for want of ROMs starts now. */
+static void start_machine(void)
+{
+    if (!cocosession_is_running(g_session) &&
+        cocosession_has_system_roms(g_session, cocosession_machine(g_session)))
+        start_session();
+    show_page();
 }
 
 static int open_file(HWND hwnd, const char *filter, DWORD extra_flags,
@@ -368,55 +442,6 @@ static void import_media(HWND hwnd)
                     "FujiNet Go CoCo", MB_ICONWARNING);
 }
 
-/* OFN_ALLOWMULTISELECT packs the result as "dir\0file1\0file2\0...\0\0" when
- * more than one file was picked, or a single full path with no trailing
- * NUL-separated tail when only one was. */
-static void import_roms(HWND hwnd)
-{
-    char buf[8192], dest[1024];
-    const char *dir, *name;
-    unsigned ok = 0, total = 0;
-    char msg[256];
-
-    if (!open_file(hwnd,
-                   "CoCo system ROMs (*.rom;*.ROM;*.bin)\0*.rom;*.ROM;*.bin\0",
-                   OFN_ALLOWMULTISELECT | OFN_EXPLORER, buf, sizeof(buf)))
-        return;
-
-    dir = buf;
-    name = buf + strlen(dir) + 1;
-    if (*name == '\0') {
-        /* Single selection: buf is the whole path already. */
-        total = 1;
-        if (cocosession_import_rom(g_session, dir, dest, sizeof(dest)) == 0)
-            ok++;
-    } else {
-        char path[MAX_PATH];
-        while (*name) {
-            size_t n = strlen(name);
-            total++;
-            _snprintf(path, sizeof(path), "%s\\%s", dir, name);
-            path[sizeof(path) - 1] = '\0';
-            if (cocosession_import_rom(g_session, path, dest, sizeof(dest)) == 0)
-                ok++;
-            name += n + 1;
-        }
-    }
-
-    if (ok == 0) {
-        MessageBoxA(hwnd, cocosession_last_error(g_session),
-                    "FujiNet Go CoCo", MB_ICONWARNING);
-        return;
-    }
-    /* XRoar resolves ROMs when the machine is built, so this needs a
-     * restart -- an in-place machine switch would reuse the loaded images. */
-    restart_session();
-    _snprintf(msg, sizeof(msg), "Imported %u of %u ROM file(s) (session restarted)",
-              ok, total);
-    msg[sizeof(msg) - 1] = '\0';
-    MessageBoxA(hwnd, msg, "FujiNet Go CoCo", MB_ICONINFORMATION);
-}
-
 static void show_fujinet_config(void)
 {
     ShellExecuteA(NULL, "open", cocosession_fujinet_webui_url(g_session),
@@ -427,6 +452,8 @@ static void show_fujinet_config(void)
 
 #define LOG_TIMER_ID 1
 
+static int g_log_first; /* the next fill is the first: go to the bottom */
+
 static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
@@ -435,10 +462,51 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_TIMER: {
         static char buf[128 * 1024];
+        static char shown[128 * 1024];
         int n = cocosession_fujinet_copy_log(g_session, buf, sizeof(buf));
-        SetWindowTextA(g_log_edit, n > 0 ? buf : "(no FujiNet output yet)");
-        SendMessageA(g_log_edit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-        SendMessageA(g_log_edit, EM_SCROLLCARET, 0, 0);
+        const char *text = n > 0 ? buf : "(no FujiNet output yet)";
+        LRESULT first, lines;
+        RECT rc;
+        HDC dc;
+        int visible = 1, at_end;
+
+        /* Unchanged: leave the control alone (keeps the scroll position and
+         * any selection). */
+        if (!g_log_first && strcmp(text, shown) == 0)
+            return 0;
+        snprintf(shown, sizeof(shown), "%s", text);
+
+        /* Follow the tail only while the reader is already at the bottom;
+         * otherwise put them back on the line they were reading. The first
+         * fill starts at the bottom. */
+        first = SendMessageA(g_log_edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+        lines = SendMessageA(g_log_edit, EM_GETLINECOUNT, 0, 0);
+        GetClientRect(g_log_edit, &rc);
+        dc = GetDC(g_log_edit);
+        if (dc) {
+            HGDIOBJ old = SelectObject(
+                dc, (HGDIOBJ)SendMessageA(g_log_edit, WM_GETFONT, 0, 0));
+            TEXTMETRICA tm;
+            if (GetTextMetricsA(dc, &tm) && tm.tmHeight > 0)
+                visible = (rc.bottom - rc.top) / tm.tmHeight;
+            SelectObject(dc, old);
+            ReleaseDC(g_log_edit, dc);
+        }
+        at_end = g_log_first || first + (visible > 0 ? visible : 1) >= lines;
+        g_log_first = 0;
+
+        SendMessageA(g_log_edit, WM_SETREDRAW, FALSE, 0);
+        SetWindowTextA(g_log_edit, text);
+        if (at_end) {
+            int len = GetWindowTextLengthA(g_log_edit);
+            SendMessageA(g_log_edit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+            SendMessageA(g_log_edit, EM_SCROLLCARET, 0, 0);
+        } else {
+            LRESULT now = SendMessageA(g_log_edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+            SendMessageA(g_log_edit, EM_LINESCROLL, 0, (LPARAM)(first - now));
+        }
+        SendMessageA(g_log_edit, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(g_log_edit, NULL, TRUE);
         return 0;
     }
     case WM_CLOSE:
@@ -478,7 +546,9 @@ static void show_fujinet_log(HINSTANCE inst)
         0, 0, 0, 0, g_log_window, NULL, inst, NULL);
     SendMessageA(g_log_edit, WM_SETFONT, (WPARAM)GetStockObject(ANSI_FIXED_FONT),
                 TRUE);
+    g_log_first = 1;
     SetTimer(g_log_window, LOG_TIMER_ID, 1000, NULL);
+    SendMessageA(g_log_window, WM_TIMER, LOG_TIMER_ID, 0);
     ShowWindow(g_log_window, SW_SHOW);
 }
 
@@ -563,6 +633,11 @@ static HMENU build_menu(void)
                       (unsigned)(IDM_MACHINE_BASE + m));
     AppendMenuA(machine, MF_STRING, IDM_RESET, "Reset");
     AppendMenuA(machine, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(machine, MF_STRING, IDM_IMPORT_BIOS, "Import &BIOS...");
+    AppendMenuA(machine, MF_STRING, IDM_IMPORT_BIOS_DIR,
+                "Import BIOS from a &Folder...");
+    AppendMenuA(machine, MF_STRING, IDM_ROMS, "&ROMs...");
+    AppendMenuA(machine, MF_SEPARATOR, 0, NULL);
     AppendMenuA(machine, MF_STRING, IDM_SETTINGS, "Settings...");
     AppendMenuA(machine, MF_SEPARATOR, 0, NULL);
     AppendMenuA(machine, MF_STRING, IDM_EXIT, "E&xit");
@@ -584,7 +659,6 @@ static HMENU build_menu(void)
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)view, "&View");
 
     AppendMenuA(media, MF_STRING, IDM_IMPORT_MEDIA, "Import Disk or Tape Image...");
-    AppendMenuA(media, MF_STRING, IDM_IMPORT_ROMS, "Import System ROMs...");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)media, "M&edia");
 
     AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_CONFIG, "Configuration...");
@@ -614,6 +688,7 @@ static void apply_display_settings(void)
 {
     g_aspect_mode = cocosession_get_int(g_session, "aspect_mode", 0);
     g_smooth = cocosession_get_int(g_session, "smooth_scaling", 0);
+    coco_display_set_options(g_aspect_mode, g_smooth);
 }
 
 /* ---- settings window ---------------------------------------------------------
@@ -651,7 +726,6 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
                                             CB_GETCURSEL, 0, 0);
                 cocosession_set_int(g_session, "aspect_mode", sel);
                 apply_display_settings();
-                InvalidateRect(g_hwnd, NULL, FALSE);
             }
             return 0;
         case IDC_SET_SMOOTH: {
@@ -659,7 +733,6 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
                                   BM_GETCHECK, 0, 0) == BST_CHECKED;
             cocosession_set_int(g_session, "smooth_scaling", on);
             apply_display_settings();
-            InvalidateRect(g_hwnd, NULL, FALSE);
             return 0;
         }
         case IDC_SET_FUJINET:
@@ -776,17 +849,10 @@ static void show_settings(HINSTANCE inst)
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
-    case WM_PAINT:
-        paint(hwnd);
-        return 0;
     case WM_ERASEBKGND:
-        return 1; /* paint() clears; avoid flicker */
+        return 1; /* the display child covers the client */
     case WM_SIZE:
-        /* A resize only invalidates the newly exposed strips, and BeginPaint
-         * clips the repaint to them -- the rest of the client area would keep
-         * the image blitted at the old size (visible as a ghost after
-         * maximize or F11). Ask for the whole client area instead. */
-        InvalidateRect(hwnd, NULL, FALSE);
+        layout_display();
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
@@ -807,6 +873,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (id >= IDM_MACHINE_BASE && id < IDM_MACHINE_BASE + IDM_RADIO_SPAN) {
             cocosession_set_machine(g_session, (int)(id - IDM_MACHINE_BASE));
             rebuild_menu(hwnd);
+            start_machine();
         } else if (id >= IDM_TVINPUT_BASE &&
                   id < IDM_TVINPUT_BASE + IDM_RADIO_SPAN) {
             cocosession_set_tv_input(g_session, (int)(id - IDM_TVINPUT_BASE));
@@ -823,22 +890,48 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             show_settings((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
             break;
         case IDM_IMPORT_MEDIA:   import_media(hwnd); break;
-        case IDM_IMPORT_ROMS:    import_roms(hwnd); break;
+        case IDM_IMPORT_BIOS:
+        case IDC_BIOS_FILES:
+            if (coco_import_bios(hwnd, g_session, 0) >= 0)
+                start_machine();
+            break;
+        case IDM_IMPORT_BIOS_DIR:
+        case IDC_BIOS_FOLDER:
+            if (coco_import_bios(hwnd, g_session, 1) >= 0)
+                start_machine();
+            break;
+        case IDM_ROMS:
+            coco_roms_show(hwnd, g_session, start_machine);
+            break;
         case IDM_FUJINET_CONFIG: show_fujinet_config(); break;
         case IDM_FUJINET_LOG:
             show_fujinet_log((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
             break;
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); break;
         case IDM_DEBUGGER:   open_debugger(); break;
-        case IDM_ABOUT:
-            MessageBoxA(hwnd,
-                        "FujiNet Go CoCo " COCO_VERSION_STRING "\n"
-                        "Self-contained Tandy Color Computer with built-in "
-                        "FujiNet.\n"
-                        "Copyright (C) 2026 Thomas Cherryhomes\n"
-                        "GPL-3.0-or-later",
-                        "About FujiNet Go CoCo", MB_ICONINFORMATION);
+        case IDM_ABOUT: {
+            /* MB_USERICON with the app's own icon, not a stock Windows one. */
+            MSGBOXPARAMSA mb;
+            char text[512];
+            snprintf(text, sizeof(text),
+                     "FujiNet Go CoCo " COCO_VERSION_STRING "\n"
+                     "Self-contained Tandy Color Computer with built-in "
+                     "FujiNet.\n"
+                     "Copyright (C) 2026 Thomas Cherryhomes\n"
+                     "GPL-3.0-or-later\n\n"
+                     "Display: %s",
+                     coco_display_renderer());
+            memset(&mb, 0, sizeof(mb));
+            mb.cbSize = sizeof(mb);
+            mb.hwndOwner = hwnd;
+            mb.hInstance = (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE);
+            mb.lpszText = text;
+            mb.lpszCaption = "About FujiNet Go CoCo";
+            mb.dwStyle = MB_OK | MB_USERICON;
+            mb.lpszIcon = MAKEINTRESOURCEA(IDI_APPICON);
+            MessageBoxIndirectA(&mb);
             break;
+        }
         case IDM_EXIT: DestroyWindow(hwnd); break;
         default: break;
         }
@@ -855,12 +948,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     WNDCLASSEXA wc;
     MSG msg;
-    cocosession_start_opts opts;
     (void)prev;
     (void)cmd;
 
     SetProcessDPIAware();
-    InitializeCriticalSection(&g_fb_lock);
+    {
+        HDC dc = GetDC(NULL);
+        g_dpi = GetDeviceCaps(dc, LOGPIXELSX);
+        ReleaseDC(NULL, dc);
+    }
+    InitCommonControls();
 
     g_session = cocosession_new(NULL);
     if (!g_session) {
@@ -868,17 +965,14 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                     MB_ICONERROR);
         return 1;
     }
-    cocosession_default_opts(g_session, &opts);
-    if (cocosession_start(g_session, &opts) != 0)
-        MessageBoxA(NULL, cocosession_last_error(g_session), "FujiNet Go CoCo",
-                    MB_ICONWARNING);
+    /* No system ROMs yet: the window opens on the No-BIOS page instead. */
+    if (cocosession_has_system_roms(g_session, cocosession_machine(g_session)))
+        start_session();
     apply_display_settings();
 
     memset(&wc, 0, sizeof(wc));
     wc.cbSize = sizeof(wc);
-    /* Redraw the whole client area on any size change; the display is
-     * stretched to fit, so a partial repaint leaves stale pixels. */
-    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.style = 0;
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -894,10 +988,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                              1120, 840, NULL, g_menu, inst, NULL);
     if (!g_hwnd)
         return 1;
+    g_display = coco_display_create(g_hwnd, g_session);
+    create_nobios(inst);
+    show_page();
     ShowWindow(g_hwnd, show);
-
-    g_present_run = 1;
-    pthread_create(&g_present_thread, NULL, present_main, NULL);
 
     /* Developer affordance: open the debugger alongside the main window,
      * which is what you want when the app dies before you can reach a
@@ -914,9 +1008,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         DispatchMessageA(&msg);
     }
 
-    g_present_run = 0;
-    pthread_join(g_present_thread, NULL);
+    coco_display_destroy();
     cocosession_free(g_session);
-    DeleteCriticalSection(&g_fb_lock);
     return (int)msg.wParam;
 }

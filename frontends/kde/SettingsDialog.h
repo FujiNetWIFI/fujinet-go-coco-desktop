@@ -8,6 +8,8 @@
 #include <QCheckBox>
 #include <QDialog>
 
+#include <vector>
+
 #include "cocosession.h"
 
 class SettingsDialog : public QDialog {
@@ -22,13 +24,18 @@ public:
     bool sessionDirty() const { return m_sessionDirty; }
 
 signals:
+    /* After an import from the ROMs tab (the caller may now start the machine). */
+    void romsImported();
     /* Window-only options apply live. */
     void displayChanged();
 
 private:
+    void importRoms(bool folder);
+    void refreshRoms();
     QCheckBox *addStartOption(class QFormLayout *form, const QString &label,
                               const char *key, int def);
 
     cocosession *m_session;
     bool m_sessionDirty = false;
+    std::vector<class QLabel *> m_romRows;
 };

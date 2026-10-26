@@ -286,21 +286,35 @@ int         cocosession_fujinet_copy_log(cocosession *s, char *dst, int max);
 int cocosession_import_media(cocosession *s, const char *src_path,
                              char *dest_out, int dest_sz);
 
-/* Import a CoCo system ROM. The file is copied into the session's ROM
- * directory under its own name -- XRoar resolves ROMs by exact basename
- * against its -rompath (bas13.rom, extbas11.rom, coco3.rom, ...), so the name
- * must be preserved. Takes effect on the next start. Returns 0 on success and
- * writes the destination into dest_out.
+/* ---- system ROMs ("BIOS") -------------------------------------------------
+ * One row of the ROMs list: what a machine needs, and the machine it is for.
+ * An item is available when any known dump of it is in the ROM directory. */
+typedef struct {
+    const char *name;
+    const char *group;           /* "CoCo 2" or "CoCo 3" */
+} coco_rom_item;
+
+int cocosession_rom_item_count(void);
+const coco_rom_item *cocosession_rom_item(int i);
+int cocosession_rom_item_available(const cocosession *s, int i);
+
+/* Import system ROMs from path: a file, a zip (MAME's coco and coco3 sets
+ * work) or a folder (searched to a depth of 8). Each known dump is
+ * recognised by size and CRC32, whatever the file is called, and written
+ * under the name XRoar looks for (bas13.rom, extbas11.rom, coco3.rom, ...) in
+ * the ROM directory. A running machine is rebuilt in place so the new ROMs
+ * take effect; the session is not restarted. Writes a one-line result into
+ * msg ("Now available: ...", "Imported N file(s); ...", or that nothing was
+ * found). Returns 0 if any ROM was written, -1 if not.
  *
  * A build configured with WITH_COCO_ROMS=ON has already materialised its own
- * copies here, but an imported file always wins: the session never overwrites
- * a name that is already present. See COMPLIANCE.md. */
-int cocosession_import_rom(cocosession *s, const char *src_path,
-                           char *dest_out, int dest_sz);
+ * copies here; an imported dump replaces the file of the same name. See
+ * COMPLIANCE.md. */
+int cocosession_rom_import(cocosession *s, const char *path, char *msg, int msgsz);
 
 /* 1 when the ROM directory holds enough to boot the given machine: the CoCo 2
  * needs bas13 + extbas11, the CoCo 3 needs coco3. A frontend that gets 0 here
- * should prompt for Import System ROMs... rather than start a machine that
+ * should prompt for Import BIOS... rather than start a machine that
  * would come up to a blank screen. */
 int cocosession_has_system_roms(const cocosession *s, int machine);
 

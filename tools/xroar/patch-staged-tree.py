@@ -446,6 +446,75 @@ def add_gime_debug_accessor(root: Path) -> None:
     ])
 
 
+def make_reinitable(root: Path) -> None:
+    """Let xroar_init() run again after xroar_shutdown() in one process.
+
+    The session stops and starts the emulator on the same process (a changed
+    FujiNet option, a restart after Preferences), and XRoar 1.11 is built to
+    initialise once. Two leftovers break the second round:
+
+      * messenger_shutdown() frees client_fsm but leaves the pointer, so the
+        next messenger_client_register() reallocs freed memory -- heap
+        corruption, then a crash.
+      * xroar_shutdown()'s function-static `shutting_down` is never cleared,
+        so every shutdown after the first returns at once and the old machine
+        and configs survive into the next init.
+
+    Plus one that bites on every machine free, restart or not: coco_free()
+    runs dragon_free_common() -- which frees the breakpoint session -- and only
+    then machine_bp_remove_list(), which writes into that session (a
+    heap-use-after-free; coco3.c removes first, as it should). It is hit by
+    each in-place CoCo 2 <-> CoCo 3 switch as well as by stop.
+    """
+    patch(root, "src/messenger.c", [
+        (
+            "\tfree(client_fsm);\n\tnclients = 0;\n}",
+            "\tfree(client_fsm);\n\tclient_fsm = NULL;\n\tnclients = 0;\n}",
+        ),
+    ])
+    patch(root, "src/xroar.c", [
+        (
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\twindows32_shutdown();\n"
+            "#endif\n}",
+            "#if defined(WINDOWS32) && !defined(XROAR_DESKTOP_MODULES)\n"
+            "\twindows32_shutdown();\n"
+            "#endif\n"
+            "\t// Forget everything xroar_init() left pointing at what was just freed.\n"
+            "\tselected_cart_config = NULL;\n"
+            "\tcur_joy_config = NULL;\n"
+            "\tcur_trap_def = NULL;\n"
+            "\tnum_trap_defs = 0;\n"
+            "\ttape_motor_traps = NULL;\n"
+            "\tautorun_media_slot = media_slot_none;\n"
+            "\tload_disk_to_drive = 0;\n"
+            "\tload_hd_to_drive = 0;\n"
+            "\tif (private_cfg_have_pristine)\n"
+            "\t\tprivate_cfg = private_cfg_pristine;\n"
+            "\tshutting_down = 0;  // allow xroar_init() / xroar_shutdown() again\n}",
+        ),
+        (
+            "struct ui_interface *xroar_init(int argc, char **argv) {\n",
+            "// The option state as compiled, kept so a second init starts from it.\n"
+            "static struct private_cfg private_cfg_pristine;\n"
+            "static _Bool private_cfg_have_pristine = 0;\n\n"
+            "struct ui_interface *xroar_init(int argc, char **argv) {\n"
+            "\tif (!private_cfg_have_pristine) {\n"
+            "\t\tprivate_cfg_pristine = private_cfg;\n"
+            "\t\tprivate_cfg_have_pristine = 1;\n"
+            "\t}\n",
+        ),
+    ])
+    patch(root, "src/dragon/coco.c", [
+        (
+            "\tdragon_free_common(p);\n"
+            "\tmachine_bp_remove_list(&md->public, coco_print_breakpoint);\n",
+            "\tmachine_bp_remove_list(&md->public, coco_print_breakpoint);\n"
+            "\tdragon_free_common(p);\n",
+        ),
+    ])
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         fail("usage: patch-staged-tree.py <staged-root> <xroar-version>")
@@ -458,12 +527,14 @@ def main() -> None:
     generate_config_h(root, version)
     register_modules(root)
     add_gime_debug_accessor(root)
+    make_reinitable(root)
 
     # Record what the transforms produced, so a human comparing two staged
     # trees can tell whether the difference is upstream's or ours.
     digest = hashlib.sha256()
     for rel in ("config.h", "src/ui.c", "src/ao.c", "src/becker.c",
-                "src/tcc1014/tcc1014.h", "src/tcc1014/tcc1014.c"):
+                "src/tcc1014/tcc1014.h", "src/tcc1014/tcc1014.c",
+                "src/messenger.c", "src/dragon/coco.c"):
         digest.update(read(root / rel).encode("utf-8", "surrogateescape"))
     print(f"XRoar {version} staged; transforms sha256 {digest.hexdigest()[:16]}")
 

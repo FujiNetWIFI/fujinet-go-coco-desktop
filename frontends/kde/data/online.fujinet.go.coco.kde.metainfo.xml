@@ -44,6 +44,31 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.0" date="2026-10-26">
+      <description>
+        <p>
+          Import BIOS, as in the MS-DOS app: Machine &gt; Import BIOS… (several
+          files, or a zip such as MAME's coco set) and Import BIOS from a
+          Folder…, a No CoCo BIOS page until the ROMs are in, and a ROMs page
+          in Preferences. Files are recognised by size and CRC32 whatever
+          they are called.
+        </p>
+        <p>
+          Importing ROMs, or restarting the emulator, no longer crashes it:
+          XRoar is not restarted for an import, and three faults in its
+          second start-up are fixed.
+        </p>
+        <p>
+          Windows: the picture is drawn with Direct3D 11 (flip-model swap
+          chain, vsync-paced), the emulator is paced by a high-resolution
+          timer, and the FujiNet console log is no longer empty.
+        </p>
+        <p>
+          The console log stays where you scrolled it, and opens at the
+          bottom.
+        </p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-10-19">
       <description>
         <p>

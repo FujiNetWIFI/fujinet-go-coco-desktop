@@ -1,4 +1,4 @@
-# Windows frontend: native Win32 (GDI + DwmFlush vsync) over the shared
+# Windows frontend: native Win32 (Direct3D 11 display, GDI fallback) over the shared
 # session core. Built only on Windows hosts; verified by the Windows CI job
 # (MSYS2/MinGW-w64, .github/workflows/windows.yml). WIN32_EXECUTABLE => a
 # WinMain entry point, no console window.
@@ -16,12 +16,16 @@ configure_file(app.manifest.in "${CMAKE_CURRENT_BINARY_DIR}/app.manifest" @ONLY)
 
 add_executable(fujinet-go-coco-windows WIN32
   main.c
+  display.c
+  prefs.c
   debugger/dbg_window.c
   resource.rc
 )
 target_link_libraries(fujinet-go-coco-windows PRIVATE
   cocosession
-  gdi32 user32 comdlg32 dwmapi shell32 comctl32
+  # d3d11: the picture (display.c; d3dcompiler_47 and avrt are loaded, not
+  # linked). dwmapi: DwmFlush, the GDI fallback's frame clock.
+  d3d11 gdi32 user32 comdlg32 dwmapi shell32 comctl32
 )
 target_include_directories(fujinet-go-coco-windows PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"

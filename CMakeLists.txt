@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 # and the release workflow all take it from PROJECT_VERSION, and cutting a
 # tag checks that the tag agrees with it (see "Cutting a release" in the
 # README).
-project(fujinet-go-coco-desktop VERSION 0.3.0 LANGUAGES C)
+project(fujinet-go-coco-desktop VERSION 0.4.0 LANGUAGES C)
 
 add_compile_definitions(COCO_VERSION_STRING="${PROJECT_VERSION}")
 
@@ -28,7 +28,7 @@ option(WITH_WEBVIEW "Embed the FujiNet web UI (WebKitGTK / QtWebEngine)" ON)
 #   ON  (default) -- embed the system ROMs too, so a development build boots
 #                    straight to the CoCo 3 banner. NOT for redistribution.
 #   OFF           -- embed only HDB-DOS; the user supplies the system ROMs
-#                    through the "Import System ROMs..." path. Every artifact
+#                    through the "Import BIOS..." path. Every artifact
 #                    this repository publishes is built this way, and
 #                    core/tests/no_embedded_roms.py checks that claim against
 #                    the shipped binaries.

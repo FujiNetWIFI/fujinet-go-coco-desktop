@@ -28,6 +28,7 @@
 #import "debugger/DebuggerWindow.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 {
@@ -53,6 +54,9 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSTimer *_logTimer;
     NSWindow *_settingsWindow;
     BOOL _sessionDirty;
+    NSView *_noRoms;
+    NSMutableArray<NSTextField *> *_romStatus;
+    NSString *_logShown;
 }
 
 - (instancetype)initWithSession:(cocosession *)session
@@ -72,6 +76,76 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     cocosession_default_opts(_session, &opts);
     if (cocosession_start(_session, &opts) != 0)
         NSLog(@"session restart: %s", cocosession_last_error(_session));
+    [self showPage];
+}
+
+/* In place of the picture until the machine has its system ROMs. */
+- (NSView *)buildNoRoms:(NSRect)frame
+{
+    NSImageView *icon =
+        [NSImageView imageViewWithImage:[NSApp applicationIconImage]];
+    [icon.widthAnchor constraintEqualToConstant:96].active = YES;
+    [icon.heightAnchor constraintEqualToConstant:96].active = YES;
+    NSTextField *title = [NSTextField labelWithString:@"No CoCo BIOS"];
+    title.font = [NSFont boldSystemFontOfSize:22];
+    NSTextField *desc = [NSTextField
+        wrappingLabelWithString:
+            @"The CoCo needs its system ROMs (BASIC), which are not part of "
+            @"the app. Import the ones you have -- files, a zip such as "
+            @"MAME's coco or coco3 set, or a folder -- and the CoCo starts."];
+    desc.alignment = NSTextAlignmentCenter;
+    desc.textColor = NSColor.secondaryLabelColor;
+    desc.preferredMaxLayoutWidth = 460;
+    [desc.widthAnchor constraintEqualToConstant:460].active = YES;
+    NSButton *files = [NSButton buttonWithTitle:@"Import BIOS…"
+                                         target:self
+                                         action:@selector(importBios:)];
+    files.bezelColor = NSColor.controlAccentColor;
+    files.keyEquivalent = @"\r";
+    NSButton *folder = [NSButton buttonWithTitle:@"Import a Folder…"
+                                          target:self
+                                          action:@selector(importBiosFromFolder:)];
+    NSStackView *buttons =
+        [NSStackView stackViewWithViews:@[ files, folder ]];
+    buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    buttons.spacing = 12;
+    NSStackView *column =
+        [NSStackView stackViewWithViews:@[ icon, title, desc, buttons ]];
+    column.orientation = NSUserInterfaceLayoutOrientationVertical;
+    column.alignment = NSLayoutAttributeCenterX;
+    column.spacing = 14;
+    column.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *page = [[NSView alloc] initWithFrame:frame];
+    page.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [page addSubview:column];
+    [column.centerXAnchor constraintEqualToAnchor:page.centerXAnchor].active =
+        YES;
+    [column.centerYAnchor constraintEqualToAnchor:page.centerYAnchor].active =
+        YES;
+    return page;
+}
+
+/* The picture while the machine can run, else the No-BIOS page. */
+- (void)showPage
+{
+    BOOL ok = cocosession_is_running(_session) ||
+              cocosession_has_system_roms(_session,
+                                          cocosession_machine(_session));
+    _display.hidden = !ok;
+    _noRoms.hidden = ok;
+    if (ok)
+        [_window makeFirstResponder:_display];
+}
+
+/* Starts the machine once its ROMs are there (after an import). A machine
+ * that is running was rebuilt in place by the core: nothing to do. */
+- (void)startMachine
+{
+    if (!cocosession_is_running(_session) &&
+        cocosession_has_system_roms(_session, cocosession_machine(_session)))
+        [self restartSession];
+    [self showPage];
 }
 
 - (void)applyDisplaySettings
@@ -194,7 +268,44 @@ static NSArray<NSString *> *sessionSettingKeys(void)
         ],
     ];
 
-    NSGridView *grid = [NSGridView gridViewWithViews:rows];
+    /* ROMs: one row per item under its group, refreshed after an import. */
+    NSMutableArray<NSArray<NSView *> *> *all = [rows mutableCopy];
+    [all addObject:@[
+        [self sectionLabel:@"ROMs"], [NSTextField labelWithString:@""]
+    ]];
+    _romStatus = [NSMutableArray array];
+    const char *group = "";
+    for (int i = 0; i < cocosession_rom_item_count(); i++) {
+        const coco_rom_item *it = cocosession_rom_item(i);
+        if (strcmp(group, it->group) != 0) {
+            group = it->group;
+            NSTextField *g = [NSTextField
+                labelWithString:[NSString stringWithUTF8String:group]];
+            g.textColor = NSColor.secondaryLabelColor;
+            [all addObject:@[ g, [NSTextField labelWithString:@""] ]];
+        }
+        NSTextField *st = [NSTextField labelWithString:@""];
+        [_romStatus addObject:st];
+        [all addObject:@[
+            [NSTextField
+                labelWithString:[NSString stringWithUTF8String:it->name]],
+            st
+        ]];
+    }
+    NSButton *impFiles = [NSButton buttonWithTitle:@"Import…"
+                                            target:self
+                                            action:@selector(importBios:)];
+    NSButton *impFolder = [NSButton buttonWithTitle:@"Import a Folder…"
+                                             target:self
+                                             action:@selector(importBiosFromFolder:)];
+    NSStackView *impRow =
+        [NSStackView stackViewWithViews:@[ impFiles, impFolder ]];
+    impRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    impRow.spacing = 8;
+    [all addObject:@[ [NSTextField labelWithString:@""], impRow ]];
+    [self refreshRomRows];
+
+    NSGridView *grid = [NSGridView gridViewWithViews:all];
     grid.rowSpacing = 8;
     grid.columnSpacing = 12;
     [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
@@ -211,8 +322,10 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     root.spacing = 12;
     root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
 
+    [root layoutSubtreeIfNeeded];
+    NSSize fit = root.fittingSize;
     _settingsWindow = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, 420, 300)
+        initWithContentRect:NSMakeRect(0, 0, MAX(fit.width, 420), fit.height)
                   styleMask:NSWindowStyleMaskTitled |
                             NSWindowStyleMaskClosable |
                             NSWindowStyleMaskMiniaturizable
@@ -224,6 +337,14 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     _settingsWindow.contentView = root;
     [_settingsWindow center];
     [_settingsWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)refreshRomRows
+{
+    for (NSUInteger i = 0; i < _romStatus.count; i++)
+        _romStatus[i].stringValue =
+            cocosession_rom_item_available(_session, (int)i) ? @"Imported"
+                                                             : @"Not imported";
 }
 
 /* FujiNet options are collected while the window is open and applied in one
@@ -241,7 +362,8 @@ static NSArray<NSString *> *sessionSettingKeys(void)
 - (void)resetMachine:(id)sender
 {
     (void)sender;
-    cocosession_reset(_session);
+    if (cocosession_is_running(_session))
+        cocosession_reset(_session);
 }
 
 - (void)importMedia:(id)sender
@@ -259,33 +381,55 @@ static NSArray<NSString *> *sessionSettingKeys(void)
         NSLog(@"import: %s", cocosession_last_error(_session));
 }
 
-- (void)importRoms:(id)sender
+/* Each chosen path through the import (the core rebuilds a running machine
+ * in place); the machine starts if it now can, then one alert says what came
+ * of it all. */
+- (void)importBiosURLs:(NSArray<NSURL *> *)urls
 {
-    (void)sender;
+    NSMutableArray<NSString *> *log = [NSMutableArray array];
+    int imported = 0;
+    for (NSURL *u in urls) {
+        char msg[1024];
+        msg[0] = '\0';
+        if (cocosession_rom_import(_session, u.fileSystemRepresentation, msg,
+                                   (int)sizeof msg) == 0)
+            imported++;
+        if (msg[0])
+            [log addObject:@(msg)];
+    }
+    [self startMachine];
+    [self refreshRomRows];
+    if (log.count) {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = imported ? @"BIOS Imported" : @"Nothing Imported";
+        a.informativeText = [log componentsJoinedByString:@"\n"];
+        [a runModal];
+    }
+}
+
+- (void)importBiosChoosingFolder:(BOOL)folder
+{
     NSOpenPanel *panel = [NSOpenPanel openPanel];
-    panel.title = @"Import System ROMs";
-    /* XRoar resolves ROMs by exact basename (bas13.rom, extbas11.rom,
-     * coco3.rom, ...), so whatever is picked keeps its name. */
-    panel.allowedContentTypes = typesForExtensions(@[ @"rom", @"bin" ]);
-    panel.allowsMultipleSelection = YES;
+    panel.message = folder ? @"Import BIOS from a Folder (MAME's coco set works)"
+                           : @"Import BIOS: ROM images, zips or folders";
+    panel.canChooseDirectories = YES;
+    panel.canChooseFiles = !folder;
+    panel.allowsMultipleSelection = !folder;
     if ([panel runModal] != NSModalResponseOK || panel.URLs.count == 0)
         return;
+    [self importBiosURLs:panel.URLs];
+}
 
-    NSUInteger ok = 0;
-    for (NSURL *url in panel.URLs) {
-        char dest[1024];
-        if (cocosession_import_rom(_session, url.path.UTF8String, dest,
-                                   sizeof(dest)) == 0)
-            ok++;
-    }
-    if (ok == 0) {
-        NSLog(@"import roms: %s", cocosession_last_error(_session));
-        return;
-    }
-    /* XRoar resolves ROMs when the machine is built, so this needs a
-     * restart -- an in-place machine switch would reuse the loaded
-     * images. */
-    [self restartSession];
+- (void)importBios:(id)sender
+{
+    (void)sender;
+    [self importBiosChoosingFolder:NO];
+}
+
+- (void)importBiosFromFolder:(id)sender
+{
+    (void)sender;
+    [self importBiosChoosingFolder:YES];
 }
 
 - (void)showFujiNetConfig:(id)sender
@@ -377,17 +521,34 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     [self refreshLog];
     [_logWindow center];
     [_logWindow makeKeyAndOrderFront:nil];
+    /* the window's layout is final only now: land on the tail */
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self->_logView scrollToEndOfDocument:nil];
+    });
 }
 
+/* Replaces the text only when it changed; follows the tail only while the
+ * reader is at the bottom (the first fill starts there). */
 - (void)refreshLog
 {
     static char buf[128 * 1024];
     int n = cocosession_fujinet_copy_log(_session, buf, sizeof(buf));
     NSString *text = n > 0 ? [NSString stringWithUTF8String:buf]
                            : @"(no FujiNet output yet)";
-    if (text)
-        _logView.string = text;
-    [_logView scrollToEndOfDocument:nil];
+    if (!text || [text isEqualToString:_logShown])
+        return;
+    NSScrollView *scroll = _logView.enclosingScrollView;
+    NSRect vis = scroll.documentVisibleRect;
+    BOOL bottom = !_logShown || NSMaxY(vis) >= NSMaxY(_logView.bounds) - 4;
+    _logShown = text;
+    _logView.string = text;
+    if (bottom) {
+        [_logView.layoutManager
+            ensureLayoutForTextContainer:_logView.textContainer];
+        [_logView scrollToEndOfDocument:nil];
+    } else {
+        [_logView scrollPoint:vis.origin];
+    }
 }
 
 - (void)showDebugger:(id)sender
@@ -430,6 +591,7 @@ static NSArray<NSString *> *sessionSettingKeys(void)
 - (void)selectMachine:(NSMenuItem *)sender
 {
     cocosession_set_machine(_session, (int)sender.tag);
+    [self startMachine];
     [self rebuildMenus];
 }
 
@@ -530,6 +692,13 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     [machineMenu addItem:[self item:@"Reset"
                              action:@selector(resetMachine:)
                                 key:@""]];
+    [machineMenu addItem:[NSMenuItem separatorItem]];
+    [machineMenu addItem:[self item:@"Import BIOS…"
+                             action:@selector(importBios:)
+                                key:@""]];
+    [machineMenu addItem:[self item:@"Import BIOS from a Folder…"
+                             action:@selector(importBiosFromFolder:)
+                                key:@""]];
     machineItem.submenu = machineMenu;
     [menubar addItem:machineItem];
 
@@ -538,9 +707,6 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     [media addItem:[self item:@"Import Disk or Tape Image…"
                        action:@selector(importMedia:)
                           key:@"i"]];
-    [media addItem:[self item:@"Import System ROMs…"
-                       action:@selector(importRoms:)
-                          key:@""]];
     mediaItem.submenu = media;
     [menubar addItem:mediaItem];
 
@@ -667,12 +833,15 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     _display.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _display.frame = ((NSView *)_window.contentView).bounds;
     [_window.contentView addSubview:_display];
+    _noRoms = [self buildNoRoms:((NSView *)_window.contentView).bounds];
+    [_window.contentView addSubview:_noRoms];
     [self applyDisplaySettings];
 
     [_window center];
     [_window makeKeyAndOrderFront:nil];
     [_window makeFirstResponder:_display];
     [_display start];
+    [self showPage];
 
     /* Developer affordance shared with the other frontends. */
     if (getenv("COCO_OPEN_DEBUGGER"))

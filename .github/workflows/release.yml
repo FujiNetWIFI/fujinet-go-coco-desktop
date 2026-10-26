@@ -78,7 +78,7 @@ jobs:
             libx11-dev libxext-dev libxrandr-dev libxi-dev libxss-dev \
             libxcursor-dev libxkbcommon-dev libwayland-dev libdrm-dev \
             libgbm-dev libgl1-mesa-dev libpulse-dev libasound2-dev \
-            libxtst-dev dpkg-dev rpm
+            libxtst-dev zlib1g-dev dpkg-dev rpm
 
       - name: Build and install SDL3 (release-3.4.12, pinned)
         run: |
@@ -189,6 +189,7 @@ jobs:
             mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-libtre
             mingw-w64-ucrt-x86_64-libsystre
+            mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-nsis
 
       # Statically linked (unlike windows.yml's push-CI job, which uses the

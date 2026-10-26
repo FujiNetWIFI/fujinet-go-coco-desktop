@@ -12,7 +12,7 @@
 
 #define IDM_RESET          201
 #define IDM_IMPORT_MEDIA   202
-#define IDM_IMPORT_ROMS    203
+#define IDM_IMPORT_BIOS    203
 #define IDM_FUJINET_CONFIG 204
 #define IDM_FUJINET_LOG    205
 #define IDM_FULLSCREEN     206
@@ -20,6 +20,8 @@
 #define IDM_ABOUT          208
 #define IDM_EXIT           209
 #define IDM_SETTINGS       210
+#define IDM_IMPORT_BIOS_DIR 211
+#define IDM_ROMS           212
 
 /* Settings window child control ids. */
 #define IDC_SET_ASPECT     220

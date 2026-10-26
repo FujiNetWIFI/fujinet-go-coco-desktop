@@ -60,6 +60,18 @@ static int under(const char *dest, const char *dir)
     return dir && *dir && strncmp(dest, dir, strlen(dir)) == 0;
 }
 
+/* A file of the right size (and no particular contents) in the ROM folder. */
+static void put_rom(cocosession *s, const char *name, long size)
+{
+    char path[1024];
+    FILE *f;
+    snprintf(path, sizeof(path), "%s/%s", cocosession_roms_path(s), name);
+    f = fopen(path, "wb");
+    if (!f) return;
+    while (size-- > 0) fputc(0xa5, f);
+    fclose(f);
+}
+
 int main(void)
 {
     cocosession_paths paths;
@@ -130,39 +142,45 @@ int main(void)
     ok("...with an error that names the extension",
        strstr(cocosession_last_error(s), "txt") != NULL);
 
-    /* --- system ROM import goes to the ROM path, by exact name ---------- */
-    src = make_file("bas13.rom");
-    ok("a system ROM imports",
-       src && cocosession_import_rom(s, src, dest, sizeof(dest)) == 0);
-    ok("a system ROM lands in the ROM folder",
-       under(dest, cocosession_roms_path(s)));
-    ok("...keeping its exact basename, which is how XRoar finds it",
-       strstr(dest, "bas13.rom") != NULL);
-
     /* --- ROM detection per machine --------------------------------------
-     * A WITH_COCO_ROMS=ON build has already materialised all five into the
-     * ROM directory, so clear the two we are about to test for. Doing it
-     * explicitly makes this deterministic in BOTH build configurations
-     * rather than only the one that happens to be configured. */
-    snprintf(dest, sizeof(dest), "%s/extbas11.rom", cocosession_roms_path(s));
-    remove(dest);
-    snprintf(dest, sizeof(dest), "%s/coco3.rom", cocosession_roms_path(s));
-    remove(dest);
-
+     * Detection is by name and size in the ROM directory. (Import itself,
+     * which recognises dumps by CRC32, is rom_import_test's.) A
+     * WITH_COCO_ROMS=ON build has already materialised all five, so clear
+     * the system ROMs first: that makes this deterministic in BOTH build
+     * configurations rather than only the one that happens to be
+     * configured. */
+    {
+        static const char *const all[] = { "bas13", "bas12", "bas11", "bas10",
+                                           "extbas11", "extbas10", "coco3", NULL };
+        int i;
+        for (i = 0; all[i]; i++) {
+            snprintf(dest, sizeof(dest), "%s/%s.rom", cocosession_roms_path(s), all[i]);
+            remove(dest);
+        }
+    }
+    ok("a bare ROM folder has no BIOS for either machine",
+       !cocosession_has_system_roms(s, COCOSESSION_MACHINE_COCO2) &&
+       !cocosession_has_system_roms(s, COCOSESSION_MACHINE_COCO3));
+    put_rom(s, "bas13.rom", 0x2000);
     /* bas13 alone is not enough for a CoCo 2: it also needs extbas11. */
     ok("a CoCo 2 needs Extended BASIC too",
        !cocosession_has_system_roms(s, COCOSESSION_MACHINE_COCO2));
     ok("a CoCo 3 needs its own ROM",
        !cocosession_has_system_roms(s, COCOSESSION_MACHINE_COCO3));
-    src = make_file("extbas11.rom");
-    cocosession_import_rom(s, src, dest, sizeof(dest));
+    put_rom(s, "extbas11.rom", 0x2000);
     ok("a CoCo 2 boots with bas13 + extbas11",
        cocosession_has_system_roms(s, COCOSESSION_MACHINE_COCO2));
+    ok("...and the ROMs list says so",
+       cocosession_rom_item_available(s, 0) && cocosession_rom_item_available(s, 1) &&
+       !cocosession_rom_item_available(s, 2));
     /* The CoCo 3 wants its own ROM and does not care about the other two. */
-    src = make_file("coco3.rom");
-    cocosession_import_rom(s, src, dest, sizeof(dest));
+    put_rom(s, "coco3.rom", 0x8000);
     ok("a CoCo 3 boots with coco3.rom",
        cocosession_has_system_roms(s, COCOSESSION_MACHINE_COCO3));
+    /* A truncated file is not a ROM. */
+    put_rom(s, "coco3.rom", 0x100);
+    ok("a truncated ROM does not count",
+       !cocosession_has_system_roms(s, COCOSESSION_MACHINE_COCO3));
 
     /* --- enumerations the frontends build their menus from -------------- */
     ok("the machine table ends", cocosession_machine_name(2) == NULL);

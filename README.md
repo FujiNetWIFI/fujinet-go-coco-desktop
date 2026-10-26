@@ -46,7 +46,7 @@ and reports from real users on those platforms are very welcome.
   Configuration`), plus a live console-log window.
 - Automatic gamepad support with hotplug (SDL3) driving the analog
   joystick ports.
-- Import disk images into the FujiNet SD folder; Import System ROMs… for
+- Import disk images into the FujiNet SD folder; Import BIOS… for
   the Tandy firmware this project does not (and cannot) ship — see
   "CoCo system ROMs" below.
 - Settings/Preferences windows (GNOME, KDE, macOS ⌘,, Windows) for aspect
@@ -130,10 +130,14 @@ so the FujiNet link works either way.
   ROMs in, so the machine boots out of the box. **A build made this way must
   not be redistributed.**
 - **`WITH_COCO_ROMS=OFF`** builds without them, and is what every published
-  artifact uses. Supply your own with **Import System ROMs…**, which copies
-  them into `~/.local/share/fujinet-go-coco/roms` (override with
-  `COCO_ROM_DIR`). XRoar looks ROMs up by exact basename, so keep the names
-  (`bas13.rom`, `extbas11.rom`, `coco3.rom`).
+  artifact uses. Supply your own with **Import BIOS…** (Machine menu, the
+  **No CoCo BIOS** page, and the ROMs page of Preferences), which takes
+  single files, a zip (MAME's `coco`/`coco3` sets work) or, with **Import
+  BIOS from a Folder…**, a folder. Each dump is recognised by size and CRC32
+  whatever it is called and written into `~/.local/share/fujinet-go-coco/roms`
+  (override with `COCO_ROM_DIR`) as `bas13.rom`, `extbas11.rom`, `coco3.rom`…,
+  the names XRoar looks for. A running machine is rebuilt in place; nothing
+  restarts.
 
 This is the opposite default from the Apple II port, which follows AppleWin's
 own decade-long precedent of shipping with Apple's ROMs compiled in. XRoar

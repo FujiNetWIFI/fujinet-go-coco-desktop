@@ -119,16 +119,23 @@ static int is_file(const char *path)
     return path && *path && stat(path, &st) == 0 && S_ISREG(st.st_mode);
 }
 
+/* Copy src over dst through a temporary beside it, then rename. Opening dst
+ * "wb" first would empty it when src and dst are the same file (importing a
+ * ROM that is already in the ROM directory), and would leave a half-written
+ * file if the copy failed. */
 int copy_file(const char *src, const char *dst)
 {
     FILE *in, *out;
     char buf[65536];
+    char tmp[COCO_PATH_MAX + 8];
     size_t n;
     int rc = 0;
 
+    if (snprintf(tmp, sizeof(tmp), "%s.part", dst) >= (int)sizeof(tmp))
+        return -1;
     in = fopen(src, "rb");
     if (!in) return -1;
-    out = fopen(dst, "wb");
+    out = fopen(tmp, "wb");
     if (!out) {
         fclose(in);
         return -1;
@@ -142,6 +149,13 @@ int copy_file(const char *src, const char *dst)
     if (ferror(in)) rc = -1;
     fclose(in);
     if (fclose(out) != 0) rc = -1;
+    if (rc == 0) {
+#if defined(_WIN32)
+        remove(dst); /* rename() will not replace an existing file here */
+#endif
+        if (rename(tmp, dst) != 0) rc = -1;
+    }
+    if (rc != 0) remove(tmp);
     return rc;
 }
 
@@ -200,27 +214,6 @@ void paths_materialise_roms(cocosession *s)
         }
         fclose(f);
     }
-}
-
-/* The ROM basenames each machine cannot boot without. XRoar will start without
- * them, but the machine comes up to a blank screen, so the frontends ask
- * first. Cartridge ROMs are deliberately not listed: HDB-DOS is always
- * present, and a missing one costs the FujiNet link, not the boot. */
-int roms_present_for_machine(const char *dir, int machine)
-{
-    static const char *const coco2[] = { "bas13.rom", "extbas11.rom", NULL };
-    static const char *const coco3[] = { "coco3.rom", NULL };
-    const char *const *need =
-        (machine == COCOSESSION_MACHINE_COCO2) ? coco2 : coco3;
-    char probe[COCO_PATH_MAX];
-    int i;
-
-    for (i = 0; need[i]; i++) {
-        snprintf(probe, sizeof(probe), "%s/%s", dir, need[i]);
-        if (!is_file(probe))
-            return 0;
-    }
-    return 1;
 }
 
 /* Per-user config/data directory. On Windows this is %APPDATA% (config)

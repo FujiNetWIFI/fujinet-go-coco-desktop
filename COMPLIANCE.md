@@ -115,10 +115,10 @@ selected, and `paths.c` writes them into the user's ROM directory
 first start — **skipping any name that is already there**, so a ROM the user
 imported always wins over a compiled-in one.
 
-Users of an `OFF` build supply the ROMs through **Import System ROMs…**, which
-copies them into that directory under their own names and restarts the
-session. Without them the app reports what is missing and where to put it,
-rather than showing a black screen.
+Users of an `OFF` build supply the ROMs through **Import BIOS…**, which
+recognises each dump by size and CRC32 and writes it into that directory under
+the name XRoar looks for. Without them the window shows a **No CoCo BIOS**
+page, rather than a black screen.
 
 **This is enforced, not just documented.** The `no_embedded_roms_*` ctests take
 a distinctive slice of every ROM image in `tools/xroar/roms` and grep a built

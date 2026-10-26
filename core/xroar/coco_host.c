@@ -557,6 +557,7 @@ void cocohost_core_stop(void) {
     pthread_mutex_unlock(&g_cmd_mutex);
     atomic_store(&g_pending_tv_input, -1);
     atomic_store(&g_pending_ccr, -1);
+    atomic_store(&g_pending_cpu, -1);
     atomic_store(&g_pending_machine, -1);
     atomic_store(&g_pending_machine_tv, -1);
     atomic_store(&g_pending_reset, 0);

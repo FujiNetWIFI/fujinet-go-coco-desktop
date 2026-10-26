@@ -16,9 +16,14 @@
 #include <QAction>
 #include <QApplication>
 #include <QFileDialog>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPushButton>
+#include <QStackedWidget>
 #include <QStatusBar>
+#include <QVBoxLayout>
 
 #include "DisplayWidget.h"
 #include "debugger/DebuggerWindow.h"
@@ -36,12 +41,16 @@ MainWindow::MainWindow(cocosession *session, QWidget *parent)
     resize(1120, 840);
 
     m_display = new DisplayWidget(session, this);
-    setCentralWidget(m_display);
+    m_noBios = buildNoBiosPage();
+    m_stack = new QStackedWidget(this);
+    m_stack->addWidget(m_display);
+    m_stack->addWidget(m_noBios);
+    setCentralWidget(m_stack);
     statusBar();
 
     buildMenus();
     applyDisplaySettings();
-    m_display->setFocus();
+    showPage();
 
     /* Developer affordance: open the debugger alongside the main window,
      * which is what you want when the app dies before you reach a menu. */
@@ -69,6 +78,7 @@ void MainWindow::restartSession()
     cocosession_default_opts(m_session, &opts);
     if (cocosession_start(m_session, &opts) != 0)
         status(QString::fromUtf8(cocosession_last_error(m_session)));
+    showPage();
 }
 
 void MainWindow::importDiskImage()
@@ -90,33 +100,99 @@ void MainWindow::importDiskImage()
                           "FujiNet Configuration."));
 }
 
-void MainWindow::importSystemRoms()
+/* "BIOS images and ROM sets (*.bin *.BIN ...);;All files (*)": either case. */
+static QString romFilter()
 {
-    /* XRoar looks ROMs up by exact basename, so whatever is picked keeps its
-     * name. See COMPLIANCE.md. */
-    const QStringList paths = QFileDialog::getOpenFileNames(
-        this, QStringLiteral("Import System ROMs"), QString(),
-        QStringLiteral("CoCo system ROMs (*.rom *.ROM *.bin);;All files (*)"));
-    if (paths.isEmpty())
-        return;
+    QStringList pats;
+    for (const char *e : { "zip", "rom", "bin" })
+        pats << QStringLiteral("*.%1").arg(QLatin1String(e))
+             << QStringLiteral("*.%1").arg(QString::fromLatin1(e).toUpper());
+    return QStringLiteral("BIOS images and ROM sets (%1);;All files (*)").arg(pats.join(QLatin1Char(' ')));
+}
 
-    int ok = 0;
-    for (const QString &path : paths) {
-        char dest[1024];
-        if (cocosession_import_rom(m_session, path.toUtf8().constData(), dest,
-                                   sizeof(dest)) == 0)
-            ok++;
+/* Each chosen file (or the folder) through the import, then one message
+ * saying what came of it all, and the machine starts if it now can. The
+ * core rebuilds a running machine itself. */
+void MainWindow::importBios(bool folder)
+{
+    QStringList paths;
+    if (folder) {
+        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Import BIOS from a Folder"));
+        if (!dir.isEmpty())
+            paths << dir;
+    } else {
+        paths = QFileDialog::getOpenFileNames(this, QStringLiteral("Import BIOS"), QString(), romFilter());
     }
-    if (ok == 0) {
-        status(QString::fromUtf8(cocosession_last_error(m_session)));
-        return;
+    QStringList log;
+    int imported = 0;
+    for (const QString &p : paths) {
+        char msg[1024];
+        if (cocosession_rom_import(m_session, p.toUtf8().constData(), msg, sizeof msg) == 0)
+            imported++;
+        log << QString::fromUtf8(msg);
     }
-    /* XRoar resolves ROMs when the machine is built, so this needs a restart;
-     * an in-place machine switch would reuse the loaded images. */
-    restartSession();
-    status(QStringLiteral("Imported %1 ROM file%2 (session restarted)")
-               .arg(ok)
-               .arg(ok == 1 ? QString() : QStringLiteral("s")));
+    if (!log.isEmpty())
+        QMessageBox::information(this, imported ? QStringLiteral("BIOS Imported") : QStringLiteral("Nothing Imported"),
+                                 log.join(QLatin1Char('\n')));
+    start();
+}
+
+/* In place of the picture until the selected machine has its ROMs. */
+QWidget *MainWindow::buildNoBiosPage()
+{
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    v->addStretch(1);
+    auto *title = new QLabel(QStringLiteral("No CoCo BIOS"));
+    QFont tf = title->font();
+    tf.setPointSizeF((tf.pointSizeF() > 0 ? tf.pointSizeF() : 10) * 1.8);
+    tf.setBold(true);
+    title->setFont(tf);
+    title->setAlignment(Qt::AlignCenter);
+    auto *body = new QLabel(QStringLiteral(
+        "The CoCo needs its system ROMs (Color BASIC, Extended Color BASIC, and Super Extended "
+        "Color BASIC for the CoCo 3), which are not part of the app. Import the ones you have "
+        "\u2014 files, a zip such as MAME's coco or coco3 set, or a folder \u2014 and the CoCo starts."));
+    body->setWordWrap(true);
+    body->setAlignment(Qt::AlignCenter);
+    body->setFixedWidth(520);
+    body->setMinimumHeight(body->heightForWidth(520));
+    auto *row = new QHBoxLayout;
+    auto *files = new QPushButton(QStringLiteral("Import BIOS\u2026"));
+    auto *folder = new QPushButton(QStringLiteral("Import a Folder\u2026"));
+    files->setDefault(true);
+    connect(files, &QPushButton::clicked, this, [this] { importBios(false); });
+    connect(folder, &QPushButton::clicked, this, [this] { importBios(true); });
+    row->addStretch(1);
+    row->addWidget(files);
+    row->addWidget(folder);
+    row->addStretch(1);
+    v->addWidget(title);
+    v->addSpacing(8);
+    v->addWidget(body, 0, Qt::AlignHCenter);
+    v->addSpacing(16);
+    v->addLayout(row);
+    v->addStretch(1);
+    return page;
+}
+
+/* The picture while the machine runs or can boot, else the No-BIOS page. */
+void MainWindow::showPage()
+{
+    const bool bios = cocosession_is_running(m_session) ||
+                      cocosession_has_system_roms(m_session, cocosession_machine(m_session));
+    m_stack->setCurrentWidget(bios ? static_cast<QWidget *>(m_display) : m_noBios);
+    if (bios)
+        m_display->setFocus();
+}
+
+/* Starts the machine once its ROMs are there (after an import). */
+void MainWindow::start()
+{
+    if (!cocosession_is_running(m_session) &&
+        cocosession_has_system_roms(m_session, cocosession_machine(m_session)))
+        restartSession();
+    showPage();
 }
 
 /* The Display submenu is the one that depends on which machine is running, so
@@ -166,7 +242,7 @@ void MainWindow::buildMenus()
             status(QStringLiteral("%1 (reset)")
                        .arg(QString::fromUtf8(cocosession_machine_name(
                            cocosession_machine(m_session)))));
-            m_display->setFocus();
+            start();
         });
     }
 
@@ -175,14 +251,17 @@ void MainWindow::buildMenus()
         status(QStringLiteral("Reset"));
     });
     machineMenu->addSeparator();
+    machineMenu->addAction(QStringLiteral("Import &BIOS…"), this,
+                           [this] { importBios(false); });
+    machineMenu->addAction(QStringLiteral("Import BIOS from a &Folder…"), this,
+                           [this] { importBios(true); });
+    machineMenu->addSeparator();
     machineMenu->addAction(QStringLiteral("&Quit"), QKeySequence::Quit, qApp,
                            &QApplication::quit);
 
     QMenu *media = menuBar()->addMenu(QStringLiteral("Me&dia"));
     media->addAction(QStringLiteral("Import &Disk or Tape Image…"), this,
                      &MainWindow::importDiskImage);
-    media->addAction(QStringLiteral("Import System &ROMs…"), this,
-                     &MainWindow::importSystemRoms);
 
     QMenu *fujinet = menuBar()->addMenu(QStringLiteral("&FujiNet"));
     fujinet->addAction(QStringLiteral("&Configuration…"), this,
@@ -237,6 +316,7 @@ void MainWindow::buildMenus()
     QMenu *settings = menuBar()->addMenu(QStringLiteral("&Settings"));
     settings->addAction(QStringLiteral("&Settings…"), this, [this] {
         SettingsDialog dlg(m_session, this);
+        connect(&dlg, &SettingsDialog::romsImported, this, &MainWindow::start);
         connect(&dlg, &SettingsDialog::displayChanged, this,
                 &MainWindow::applyDisplaySettings);
         dlg.exec();
@@ -245,7 +325,7 @@ void MainWindow::buildMenus()
             status(QStringLiteral("FujiNet options applied "
                                   "(session restarted)"));
         }
-        m_display->setFocus();
+        showPage();
     });
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));

@@ -9,6 +9,8 @@
 
 #include "webview.h"
 
+#include <string.h>
+
 #ifdef HAVE_WEBKIT
 #include <webkit/webkit.h>
 #endif
@@ -58,6 +60,8 @@ void coco_fujinet_config_show(GtkWindow *parent, cocosession *session)
 typedef struct {
     cocosession *session;
     GtkTextView *view;
+    GtkTextMark *end_mark;  /* at the buffer's end, right gravity */
+    gboolean filled;        /* the first fill has happened */
     guint timer;
 } LogState;
 
@@ -65,13 +69,34 @@ static gboolean log_refresh(gpointer user_data)
 {
     LogState *st = user_data;
     static char buf[128 * 1024];
+    static char shown[128 * 1024];
     GtkTextBuffer *tb = gtk_text_view_get_buffer(st->view);
-    GtkTextIter end;
+    GtkAdjustment *adj =
+        gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(st->view));
     int n = cocosession_fujinet_copy_log(st->session, buf, sizeof(buf));
+    const char *text = n > 0 ? buf : "(no FujiNet output yet)";
+    double value = 0;
+    gboolean at_end = TRUE;
 
-    gtk_text_buffer_set_text(tb, n > 0 ? buf : "(no FujiNet output yet)", -1);
-    gtk_text_buffer_get_end_iter(tb, &end);
-    gtk_text_view_scroll_to_iter(st->view, &end, 0, FALSE, 0, 1.0);
+    /* Unchanged: leave the view alone (keeps the scroll position and any
+     * selection). */
+    if (st->filled && strcmp(text, shown) == 0)
+        return G_SOURCE_CONTINUE;
+    g_strlcpy(shown, text, sizeof(shown));
+
+    /* Follow the tail only while the reader is already at the bottom (the
+     * first fill starts there); otherwise keep them where they were. */
+    if (adj && st->filled) {
+        value = gtk_adjustment_get_value(adj);
+        at_end = value >= gtk_adjustment_get_upper(adj) -
+                              gtk_adjustment_get_page_size(adj) - 1.0;
+    }
+    gtk_text_buffer_set_text(tb, text, -1);
+    if (at_end)
+        gtk_text_view_scroll_to_mark(st->view, st->end_mark, 0, FALSE, 0, 1.0);
+    else if (adj)
+        gtk_adjustment_set_value(adj, value);
+    st->filled = TRUE;
     return G_SOURCE_CONTINUE;
 }
 
@@ -115,6 +140,12 @@ void coco_fujinet_log_show(GtkWindow *parent, cocosession *session)
     st = g_new0(LogState, 1);
     st->session = session;
     st->view = GTK_TEXT_VIEW(view);
+    {
+        GtkTextBuffer *tb = gtk_text_view_get_buffer(st->view);
+        GtkTextIter end;
+        gtk_text_buffer_get_end_iter(tb, &end);
+        st->end_mark = gtk_text_buffer_create_mark(tb, NULL, &end, FALSE);
+    }
     st->timer = g_timeout_add_seconds(1, log_refresh, st);
     g_signal_connect(win, "destroy", G_CALLBACK(log_destroyed), st);
     log_refresh(st);
