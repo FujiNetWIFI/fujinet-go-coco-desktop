@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=FujiNet Go CoCo
+Name=FujiNet Go CoCo (GNOME)
 GenericName=Color Computer with FujiNet
 Comment=Self-contained Tandy Color Computer with built-in FujiNet
 Exec=fujinet-go-coco-gnome

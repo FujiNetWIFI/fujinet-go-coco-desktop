@@ -23,6 +23,7 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include "DisplayWidget.h"
@@ -314,7 +315,7 @@ void MainWindow::buildMenus()
                     this, [this] { DebuggerWindow::show(this, m_session); });
 
     QMenu *settings = menuBar()->addMenu(QStringLiteral("&Settings"));
-    settings->addAction(QStringLiteral("&Settings…"), this, [this] {
+    QAction *settingsAct = settings->addAction(QStringLiteral("&Settings…"), this, [this] {
         SettingsDialog dlg(m_session, this);
         connect(&dlg, &SettingsDialog::romsImported, this, &MainWindow::start);
         connect(&dlg, &SettingsDialog::displayChanged, this,
@@ -327,6 +328,9 @@ void MainWindow::buildMenus()
         }
         showPage();
     });
+    /* Developer affordance, like COCO_OPEN_DEBUGGER. */
+    if (qEnvironmentVariableIsSet("COCO_OPEN_SETTINGS"))
+        QTimer::singleShot(500, settingsAct, &QAction::trigger);
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));
     help->addAction(QStringLiteral("&About"), this, [this] {

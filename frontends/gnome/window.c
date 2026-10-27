@@ -646,5 +646,7 @@ GtkWidget *coco_window_new(AdwApplication *app, cocosession *session)
      * which is what you want when the app dies before you can reach a menu. */
     if (getenv("COCO_OPEN_DEBUGGER"))
         coco_debugger_show(GTK_WINDOW(self), session);
+    if (getenv("COCO_OPEN_SETTINGS"))
+        coco_prefs_show(self, session, apply_display_settings);
     return GTK_WIDGET(self);
 }
