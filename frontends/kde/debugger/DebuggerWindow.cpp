@@ -383,15 +383,20 @@ private:
         const int n = cocodebug_fujinet_trace(m_dbg, p, kFujiTraceMax);
         const bool hide = m_fujiHideReady->isChecked();
 
-        if (!cocosession_fujinet_running(m_session))
+        if (!cocosession_fujinet_running(m_session) &&
+            !cocosession_fujinet_external(m_session))
             m_fujiNote->setText(
                 QStringLiteral("FujiNet is off (Settings ▸ FujiNet)."));
         else
             m_fujiNote->setText(
-                cocosession_fujinet_link(m_session)
-                    ? QStringLiteral("FujiNet is on the Becker port, connected.")
-                    : QStringLiteral("FujiNet is on the Becker port, not "
-                                     "connected."));
+                QStringLiteral("%1 FujiNet on the Becker port %2, %3.")
+                    .arg(cocosession_fujinet_external(m_session)
+                             ? QStringLiteral("External")
+                             : QStringLiteral("Built-in"),
+                         QString::fromUtf8(cocosession_becker_endpoint(m_session)),
+                         cocosession_fujinet_link(m_session)
+                             ? QStringLiteral("connected")
+                             : QStringLiteral("not connected")));
         cocodebug_fujinet_state(m_dbg, state, sizeof(state));
         setText(m_fujiState, QString::fromUtf8(state));
         m_fujiClock.restart();

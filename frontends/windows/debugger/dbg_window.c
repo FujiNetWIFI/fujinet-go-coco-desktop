@@ -570,14 +570,20 @@ static void refresh_fujinet(debugger *d, int force)
         SendMessageA(d->fuji_hide, BM_GETCHECK, 0, 0) == BST_CHECKED;
     int i, follow, shown = 0;
 
-    if (!cocosession_fujinet_running(d->session))
+    if (!cocosession_fujinet_running(d->session) &&
+        !cocosession_fujinet_external(d->session))
         set_label_utf8(d->fuji_note,
                        "FujiNet is off (Machine \xe2\x96\xb8 Settings).");
-    else
-        set_label_utf8(d->fuji_note,
-                       cocosession_fujinet_link(d->session)
-                           ? "FujiNet is on the Becker port, connected."
-                           : "FujiNet is on the Becker port, not connected.");
+    else {
+        char note[160];
+        snprintf(note, sizeof note, "%s FujiNet on the Becker port %s, %s.",
+                 cocosession_fujinet_external(d->session) ? "External"
+                                                           : "Built-in",
+                 cocosession_becker_endpoint(d->session),
+                 cocosession_fujinet_link(d->session) ? "connected"
+                                                       : "not connected");
+        set_label_utf8(d->fuji_note, note);
+    }
     cocodebug_fujinet_state(d->dbg, state, sizeof(state));
     set_text_at(d->state_text, state, 0);
     d->fuji_ticks = 0;

@@ -30,6 +30,8 @@
 #define IDC_SET_AUDIO      223
 #define IDC_SET_GAMEPAD    224
 #define IDC_SET_NOTE       225
+#define IDC_SET_EXTERNAL   226
+#define IDC_SET_ADDR       227
 
 #define IDM_MACHINE_BASE   300
 #define IDM_TVINPUT_BASE   320

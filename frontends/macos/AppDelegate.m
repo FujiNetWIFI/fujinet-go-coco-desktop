@@ -54,6 +54,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSTimer *_logTimer;
     NSWindow *_settingsWindow;
     BOOL _sessionDirty;
+    NSTextField *_externalField;
     NSView *_noRoms;
     NSMutableArray<NSTextField *> *_romStatus;
     NSString *_logShown;
@@ -172,7 +173,8 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     static NSArray<NSString *> *keys;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-      keys = @[ @"enable_fujinet", @"enable_audio", @"enable_gamepad" ];
+      keys = @[ @"enable_fujinet", @"enable_audio", @"enable_gamepad",
+              @"fujinet_external", @"fujinet_external_addr" ];
     });
     return keys;
 }
@@ -224,11 +226,33 @@ static NSArray<NSString *> *sessionSettingKeys(void)
         value = ((NSButton *)control).state == NSControlStateValueOn ? 1 : 0;
 
     cocosession_set_int(_session, key.UTF8String, value);
+    if ([key isEqualToString:@"fujinet_external"])
+        _externalField.enabled = value != 0;
 
     if ([sessionSettingKeys() containsObject:key])
         _sessionDirty = YES;
     else
         [self applyDisplaySettings];
+}
+
+/* The external-FujiNet address field: valid text (or none, meaning
+ * 127.0.0.1:65504) is saved; anything else is shown in red and not saved. */
+- (void)externalAddrChanged:(id)sender
+{
+    NSTextField *field = sender;
+    NSString *text = [field.stringValue
+        stringByTrimmingCharactersInSet:NSCharacterSet
+                                            .whitespaceAndNewlineCharacterSet];
+    char host[64];
+    int port;
+    if (cocosession_parse_hostport(text.UTF8String, host, sizeof host,
+                                   &port) != 0) {
+        field.textColor = NSColor.systemRedColor;
+        return;
+    }
+    field.textColor = NSColor.controlTextColor;
+    cocosession_set_str(_session, "fujinet_external_addr", text.UTF8String);
+    _sessionDirty = YES;
 }
 
 - (void)showSettings:(id)sender
@@ -238,6 +262,16 @@ static NSArray<NSString *> *sessionSettingKeys(void)
         [_settingsWindow makeKeyAndOrderFront:nil];
         return;
     }
+
+    _externalField = [NSTextField textFieldWithString:@(
+        cocosession_get_str(_session, "fujinet_external_addr", ""))];
+    _externalField.placeholderString = @"127.0.0.1:65504";
+    _externalField.preferredMaxLayoutWidth = 240;
+    _externalField.enabled =
+        cocosession_get_int(_session, "fujinet_external", 0) != 0;
+    _externalField.target = self;
+    _externalField.action = @selector(externalAddrChanged:);
+    [_externalField.cell setSendsActionOnEndEditing:YES];
 
     NSArray<NSArray<NSView *> *> *rows = @[
         @[ [self sectionLabel:@"Display"], [NSTextField labelWithString:@""] ],
@@ -257,6 +291,14 @@ static NSArray<NSString *> *sessionSettingKeys(void)
         @[
             [NSTextField labelWithString:@"FujiNet"],
             [self checkBoxForKey:"enable_fujinet" fallback:1]
+        ],
+        @[
+            [NSTextField labelWithString:@"Use external FujiNet"],
+            [self checkBoxForKey:"fujinet_external" fallback:0]
+        ],
+        @[
+            [NSTextField labelWithString:@"Address:port"],
+            _externalField
         ],
         @[
             [NSTextField labelWithString:@"Sound"],
@@ -312,7 +354,8 @@ static NSArray<NSString *> *sessionSettingKeys(void)
 
     NSTextField *note = [NSTextField
         labelWithString:@"Display options apply immediately. FujiNet options "
-                        @"take effect when this window is closed."];
+                        @"take effect when this window is closed.\nAn external "
+                        @"FujiNet is reached at the address above."];
     note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
     note.textColor = NSColor.secondaryLabelColor;
 
@@ -351,6 +394,8 @@ static NSArray<NSString *> *sessionSettingKeys(void)
  * restart when it closes. */
 - (void)windowWillClose:(NSNotification *)note
 {
+    if (note.object == _settingsWindow)
+        [_settingsWindow makeFirstResponder:nil]; /* commit a field edit */
     if (note.object != _settingsWindow || !_sessionDirty)
         return;
     _sessionDirty = NO;
@@ -435,6 +480,14 @@ static NSArray<NSString *> *sessionSettingKeys(void)
 - (void)showFujiNetConfig:(id)sender
 {
     (void)sender;
+    if (cocosession_fujinet_external(_session)) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"FujiNet is external";
+        alert.informativeText = @"Use the web UI of the FujiNet instance "
+                                @"this app connects to.";
+        [alert runModal];
+        return;
+    }
     if (_configWindow) {
         [_configWindow makeKeyAndOrderFront:nil];
         return;
@@ -485,6 +538,14 @@ static NSArray<NSString *> *sessionSettingKeys(void)
 - (void)showFujiNetLog:(id)sender
 {
     (void)sender;
+    if (cocosession_fujinet_external(_session)) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"FujiNet is external";
+        alert.informativeText = @"Its console output is in the process "
+                                @"that is running it.";
+        [alert runModal];
+        return;
+    }
     if (_logWindow) {
         [_logWindow makeKeyAndOrderFront:nil];
         return;

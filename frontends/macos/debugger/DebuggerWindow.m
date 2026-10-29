@@ -849,13 +849,16 @@ static NSView *tabPage(NSView *content)
     const int n = cocodebug_fujinet_trace(_dbg, p, FUJI_TRACE_MAX);
     const BOOL hide = _fujiHideReady.state == NSControlStateValueOn;
 
-    if (!cocosession_fujinet_running(_session))
+    if (!cocosession_fujinet_running(_session) &&
+        !cocosession_fujinet_external(_session))
         _fujiNote.stringValue = @"FujiNet is off (Settings ▸ FujiNet).";
     else
-        _fujiNote.stringValue =
-            cocosession_fujinet_link(_session)
-                ? @"FujiNet is on the Becker port, connected."
-                : @"FujiNet is on the Becker port, not connected.";
+        _fujiNote.stringValue = [NSString stringWithFormat:
+            @"%@ FujiNet on the Becker port %s, %@.",
+            cocosession_fujinet_external(_session) ? @"External" : @"Built-in",
+            cocosession_becker_endpoint(_session),
+            cocosession_fujinet_link(_session) ? @"connected"
+                                               : @"not connected"];
     cocodebug_fujinet_state(_dbg, state, (int)sizeof state);
     setText(_fujiState, textFrom(state), NO);
     _fujiTicks = 0;

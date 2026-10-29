@@ -473,15 +473,20 @@ static void refresh_fujinet(DebuggerUI *ui, gboolean force)
     GString *t;
     int i, shown = 0;
 
-    if (!cocosession_fujinet_running(ui->session))
+    if (!cocosession_fujinet_running(ui->session) &&
+        !cocosession_fujinet_external(ui->session))
         gtk_label_set_text(ui->fuji_note,
                            "FujiNet is off (Preferences \xe2\x96\xb8 FujiNet).");
-    else
-        gtk_label_set_text(ui->fuji_note,
-                           cocosession_fujinet_link(ui->session)
-                               ? "FujiNet is on the Becker port, connected."
-                               : "FujiNet is on the Becker port, not "
-                                 "connected.");
+    else {
+        char note[160];
+        g_snprintf(note, sizeof note, "%s FujiNet on the Becker port %s, %s.",
+                   cocosession_fujinet_external(ui->session) ? "External"
+                                                              : "Built-in",
+                   cocosession_becker_endpoint(ui->session),
+                   cocosession_fujinet_link(ui->session) ? "connected"
+                                                          : "not connected");
+        gtk_label_set_text(ui->fuji_note, note);
+    }
     cocodebug_fujinet_state(ui->dbg, state, sizeof(state));
     set_text_at(ui->fuji_state, state, FALSE);
     ui->fuji_refreshed_us = g_get_monotonic_time();

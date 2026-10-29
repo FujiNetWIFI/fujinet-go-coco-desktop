@@ -141,6 +141,10 @@ typedef struct {
     int ccr;       /* COCOSESSION_CCR_* */
     int cpu;       /* COCOSESSION_CPU_* */
     int enable_fujinet; /* start the in-process FujiNet runtime */
+    int external_fujinet; /* 1: don't start it; connect to another FujiNet
+                           * instance's Becker port at fujinet_addr */
+    char fujinet_addr[80]; /* "host:port" or "port" (external only); ""
+                            * = 127.0.0.1:65504 */
     int enable_audio;   /* open the SDL audio device */
     int enable_gamepad; /* start the SDL gamepad thread */
 } cocosession_start_opts;
@@ -270,7 +274,18 @@ void cocosession_gamepad_assign(cocosession *s, int idx, int port);
 int  cocosession_render_audio(cocosession *s, int16_t *out, int nsamples);
 
 /* ---- FujiNet -------------------------------------------------------------*/
+/* Parses the "Use external FujiNet" address field: "host:port" (host an IPv4
+ * literal or a name the Becker connect resolves) or a bare "port". Empty text
+ * means the default, 127.0.0.1:65504. Returns 0 and fills host/port, or -1
+ * when the text is not an address:port (nothing is written then). */
+int         cocosession_parse_hostport(const char *text, char *host,
+                                       int hostsz, int *port);
 int         cocosession_fujinet_running(const cocosession *s);
+/* 1 when the session was started to connect to an external FujiNet. */
+int         cocosession_fujinet_external(const cocosession *s);
+/* "host:port" the Becker connection targets (the running session's, or the
+ * default 127.0.0.1:65504 before the first start). */
+const char *cocosession_becker_endpoint(const cocosession *s);
 /* 1 while the emulator is connected to FujiNet over the Becker port. */
 int         cocosession_fujinet_link(const cocosession *s);
 const char *cocosession_fujinet_webui_url(const cocosession *s);

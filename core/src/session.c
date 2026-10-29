@@ -241,7 +241,7 @@ static void *emu_thread_main(void *arg)
     /* XRoar resolves every machine and cartridge ROM by basename against this
      * path, so it must be set before the core starts. */
     cocohost_set_rompath(s->roms_dir);
-    cocohost_set_becker_endpoint("127.0.0.1", COCOSESSION_BECKER_PORT);
+    cocohost_set_becker_endpoint(s->becker_host, s->becker_port);
 
     cocohost_set_log_sink(core_log_sink, s);
     cocohost_set_frame_sink(on_core_frame, s);
@@ -416,6 +416,9 @@ void cocosession_default_opts(cocosession *s, cocosession_start_opts *opts)
     if (!cocosession_tv_input_supported(opts->machine, opts->tv_input))
         opts->tv_input = COCOSESSION_TV_COMPOSITE_BR;
     opts->enable_fujinet = cocosession_get_int(s, "enable_fujinet", 1) ? 1 : 0;
+    opts->external_fujinet = cocosession_get_int(s, "fujinet_external", 0) ? 1 : 0;
+    snprintf(opts->fujinet_addr, sizeof(opts->fujinet_addr), "%s",
+             cocosession_get_str(s, "fujinet_external_addr", ""));
     opts->enable_audio = cocosession_get_int(s, "enable_audio", 1) ? 1 : 0;
     opts->enable_gamepad = cocosession_get_int(s, "enable_gamepad", 1) ? 1 : 0;
 }
@@ -461,8 +464,28 @@ int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
      * with nothing on the other end of the Becker port. Nor is a timeout --
      * the patched becker.c keeps retrying, so the link comes up late rather
      * than never. */
-    if (opts->enable_fujinet && fujinet_start(s) == 0)
+    s->fujinet_external = 0;
+    snprintf(s->becker_host, sizeof(s->becker_host), "127.0.0.1");
+    s->becker_port = COCOSESSION_BECKER_PORT;
+    if (opts->external_fujinet) {
+        if (cocosession_parse_hostport(opts->fujinet_addr, s->becker_host,
+                                       sizeof(s->becker_host),
+                                       &s->becker_port) != 0) {
+            session_set_error(s, "\"%s\" is not an address:port for the "
+                              "external FujiNet (example: 192.168.1.20:%d)",
+                              opts->fujinet_addr, COCOSESSION_BECKER_PORT);
+            pthread_mutex_unlock(&s->lifecycle_mtx);
+            return -1;
+        }
+        /* Nothing to wait for: the patched becker.c keeps retrying until
+         * the other FujiNet is there. */
+        s->fujinet_external = 1;
+        s->webui_url[0] = '\0';
+    } else if (opts->enable_fujinet && fujinet_start(s) == 0) {
         fujinet_wait_for_becker(s, 10000);
+    }
+    snprintf(s->becker_endpoint, sizeof(s->becker_endpoint), "%s:%d",
+             s->becker_host, s->becker_port);
 
     /* The debugger's FujiNet trace runs from here, not from when the
      * debugger opens: it is most useful about what happened first. */
@@ -553,6 +576,7 @@ void cocosession_stop(cocosession *s)
     audio_stop(s);
     gamepad_stop(s);
     fujinet_stop(s);
+    s->fujinet_external = 0;
     cocohost_audio_set_active(1);
     s->running = 0;
     pthread_mutex_unlock(&s->lifecycle_mtx);
@@ -694,6 +718,65 @@ const char *cocosession_fujinet_webui_url(const cocosession *s)
 int cocosession_fujinet_running(const cocosession *s)
 {
     return s->fujinet_running;
+}
+
+int cocosession_fujinet_external(const cocosession *s)
+{
+    return s->fujinet_external;
+}
+
+const char *cocosession_becker_endpoint(const cocosession *s)
+{
+    return s->becker_endpoint[0] ? s->becker_endpoint : "127.0.0.1:65504";
+}
+
+int cocosession_parse_hostport(const char *text, char *host, int hostsz,
+                               int *port)
+{
+    char buf[80], *colon, *end;
+    const char *hst = "127.0.0.1";
+    long num = COCOSESSION_BECKER_PORT;
+    size_t len, pos;
+
+    if (!text) text = "";
+    while (*text == ' ' || *text == '\t') text++;
+    len = strlen(text);
+    while (len && (text[len - 1] == ' ' || text[len - 1] == '\t' ||
+                   text[len - 1] == '\n' || text[len - 1] == '\r'))
+        len--;
+    if (len >= sizeof(buf)) return -1;
+    memcpy(buf, text, len);
+    buf[len] = '\0';
+
+    if (len) {
+        colon = strrchr(buf, ':');
+        if (colon) {
+            *colon = '\0';
+            hst = buf;
+            if (!*hst) return -1;
+            text = colon + 1;
+        } else {
+            text = buf;
+        }
+        if (!*text) return -1;
+        num = strtol(text, &end, 10);
+        if (*end || num < 1 || num > 65535) return -1;
+        if (colon) {
+            /* A name or IPv4 literal: letters, digits, '.' and '-' only. */
+            for (pos = 0; hst[pos]; pos++) {
+                char chr = hst[pos];
+                if (!((chr >= '0' && chr <= '9') || (chr >= 'a' && chr <= 'z') ||
+                      (chr >= 'A' && chr <= 'Z') || chr == '.' || chr == '-'))
+                    return -1;
+            }
+            if (hst[0] == '.' || hst[0] == '-' || hst[strlen(hst) - 1] == '.')
+                return -1;
+        }
+    }
+    if ((int)strlen(hst) >= hostsz) return -1;
+    memcpy(host, hst, strlen(hst) + 1);
+    *port = (int)num;
+    return 0;
 }
 
 int cocosession_fujinet_link(const cocosession *s)

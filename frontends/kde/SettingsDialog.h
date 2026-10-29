@@ -7,6 +7,7 @@
 
 #include <QCheckBox>
 #include <QDialog>
+#include <QLineEdit>
 
 #include <vector>
 
@@ -23,6 +24,10 @@ public:
      * target they all switch in place, from the Machine and View menus. */
     bool sessionDirty() const { return m_sessionDirty; }
 
+    /* Saves the external FujiNet fields first; an address that is not
+     * host:port keeps the dialog open. */
+    void done(int result) override;
+
 signals:
     /* After an import from the ROMs tab (the caller may now start the machine). */
     void romsImported();
@@ -36,6 +41,8 @@ private:
                               const char *key, int def);
 
     cocosession *m_session;
+    QCheckBox *m_external = nullptr;
+    QLineEdit *m_externalAddr = nullptr;
     bool m_sessionDirty = false;
     std::vector<class QLabel *> m_romRows;
 };

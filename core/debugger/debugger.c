@@ -824,7 +824,7 @@ int cocodebug_fujinet_state(cocodebug *d, char *dst, int dstsz)
     pthread_mutex_unlock(&d->trace_mtx);
 
     n = snprintf(dst, (size_t)dstsz,
-                 "Becker port     127.0.0.1:%d\n"
+                 "Becker port     %s\n"
                  "FujiNet         %s\n"
                  "Link            %s\n"
                  "Unread          %d B\n"
@@ -834,7 +834,8 @@ int cocodebug_fujinet_state(cocodebug *d, char *dst, int dstsz)
                  "Exchanges       %llu\n"
                  "\n"
                  "In progress     %s\n",
-                 COCOSESSION_BECKER_PORT,
+                 cocosession_becker_endpoint(d->s),
+                 d->s->fujinet_external ? "external" :
                  d->s->fujinet_running ? "listening" : "off",
                  cocohost_becker_link_up() ? "connected" : "not connected",
                  cocohost_becker_rx_pending(), out, in, ex, pending);

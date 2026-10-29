@@ -101,6 +101,10 @@ struct cocosession {
     /* ---- FujiNet runtime (fujinet_runtime.c) ---- */
     int fujinet_loaded;  /* dlopen'd (kept for process lifetime) */
     int fujinet_running;
+    int fujinet_external;      /* connecting to a FujiNet that isn't ours */
+    char becker_host[64];      /* where the Becker connection goes */
+    int becker_port;
+    char becker_endpoint[80];  /* "host:port" for display */
 
     /* ---- debugger ---- */
     cocodebug *debugger;

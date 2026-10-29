@@ -66,6 +66,33 @@ void SettingsDialog::importRoms(bool folder)
     refreshRoms();
 }
 
+void SettingsDialog::done(int result)
+{
+    const QByteArray addr = m_externalAddr->text().trimmed().toUtf8();
+    char host[64];
+    int port;
+
+    if (m_external->isChecked() &&
+        cocosession_parse_hostport(addr.constData(), host, sizeof host,
+                                   &port) != 0) {
+        QMessageBox::warning(
+            this, QStringLiteral("External FujiNet"),
+            QStringLiteral("\"%1\" is not an address:port. Example: "
+                           "127.0.0.1:65504")
+                .arg(m_externalAddr->text()));
+        m_externalAddr->setFocus();
+        return;
+    }
+    if (QString::fromUtf8(cocosession_get_str(m_session,
+                                              "fujinet_external_addr", "")) !=
+        QString::fromUtf8(addr)) {
+        cocosession_set_str(m_session, "fujinet_external_addr",
+                            addr.constData());
+        m_sessionDirty = true;
+    }
+    QDialog::done(result);
+}
+
 SettingsDialog::SettingsDialog(cocosession *session, QWidget *parent)
     : QDialog(parent), m_session(session)
 {
@@ -102,12 +129,26 @@ SettingsDialog::SettingsDialog(cocosession *session, QWidget *parent)
     auto *runtimeBox = new QGroupBox(QStringLiteral("FujiNet"), this);
     auto *runtimeForm = new QFormLayout(runtimeBox);
     addStartOption(runtimeForm, QStringLiteral("FujiNet"), "enable_fujinet", 1);
+    m_external = addStartOption(runtimeForm,
+                                QStringLiteral("Use external FujiNet"),
+                                "fujinet_external", 0);
+    m_externalAddr = new QLineEdit(
+        QString::fromUtf8(cocosession_get_str(m_session,
+                                              "fujinet_external_addr", "")),
+        runtimeBox);
+    m_externalAddr->setPlaceholderText(QStringLiteral("127.0.0.1:65504"));
+    m_externalAddr->setEnabled(m_external->isChecked());
+    connect(m_external, &QCheckBox::toggled, m_externalAddr,
+            &QWidget::setEnabled);
+    runtimeForm->addRow(QStringLiteral("Address:port"), m_externalAddr);
     addStartOption(runtimeForm, QStringLiteral("Sound"), "enable_audio", 1);
     addStartOption(runtimeForm, QStringLiteral("Gamepads"), "enable_gamepad", 1);
     auto *note = new QLabel(
         QStringLiteral("FujiNet listens on the Becker port and the emulator "
-                       "connects out to it. These are applied by restarting "
-                       "the session when this dialog closes."),
+                       "connects out to it; with an external FujiNet it "
+                       "connects to the address above instead. These are "
+                       "applied by restarting the session when this dialog "
+                       "closes."),
         runtimeBox);
     note->setWordWrap(true);
     runtimeForm->addRow(note);

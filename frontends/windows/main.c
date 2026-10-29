@@ -444,6 +444,12 @@ static void import_media(HWND hwnd)
 
 static void show_fujinet_config(void)
 {
+    if (cocosession_fujinet_external(g_session)) {
+        MessageBoxA(g_hwnd, "FujiNet is external: use the web UI of the "
+                    "instance this app connects to.", "FujiNet Go CoCo",
+                    MB_ICONINFORMATION);
+        return;
+    }
     ShellExecuteA(NULL, "open", cocosession_fujinet_webui_url(g_session),
                  NULL, NULL, SW_SHOWNORMAL);
 }
@@ -521,6 +527,12 @@ static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
 static void show_fujinet_log(HINSTANCE inst)
 {
+    if (cocosession_fujinet_external(g_session)) {
+        MessageBoxA(g_hwnd, "FujiNet is external: its console output is in "
+                    "the process that is running it.", "FujiNet Go CoCo",
+                    MB_ICONINFORMATION);
+        return;
+    }
     static int registered;
     if (g_log_window) {
         SetForegroundWindow(g_log_window);
@@ -700,6 +712,10 @@ static void apply_display_settings(void)
  * input/Artifact Colour/CPU are not duplicated here: they already live in
  * the main menu as live radio groups. */
 
+#ifndef EM_SETCUEBANNER
+#define EM_SETCUEBANNER 0x1501
+#endif
+
 static HWND g_settings_window;
 static int g_settings_dirty;
 
@@ -712,6 +728,38 @@ static void settings_apply_checkbox(HWND hwnd, int id, const char *key,
         cocosession_set_int(g_session, key, on);
         g_settings_dirty = 1;
     }
+}
+
+/* Trims the address field into addr; with the switch on, text that is not
+ * host:port is refused (returns 0) and nothing is saved. */
+static int settings_save_external(HWND hwnd)
+{
+    char addr[96], host[64], *start = addr, *end;
+    int port, external, changed;
+
+    external = SendDlgItemMessageA(hwnd, IDC_SET_EXTERNAL, BM_GETCHECK, 0,
+                                   0) == BST_CHECKED;
+    GetDlgItemTextA(hwnd, IDC_SET_ADDR, addr, sizeof(addr));
+    while (*start == ' ' || *start == '\t') start++;
+    memmove(addr, start, strlen(start) + 1);
+    end = addr + strlen(addr);
+    while (end > addr && (end[-1] == ' ' || end[-1] == '\t')) *--end = '\0';
+    if (external &&
+        cocosession_parse_hostport(addr, host, sizeof(host), &port) != 0) {
+        MessageBoxA(hwnd, "That is not an address:port.\n\nExample: "
+                    "127.0.0.1:65504", "External FujiNet", MB_ICONWARNING);
+        SetFocus(GetDlgItem(hwnd, IDC_SET_ADDR));
+        return 0;
+    }
+    changed = cocosession_get_int(g_session, "fujinet_external", 0) !=
+                  external ||
+              strcmp(cocosession_get_str(g_session, "fujinet_external_addr",
+                                         ""), addr) != 0;
+    cocosession_set_int(g_session, "fujinet_external", external);
+    cocosession_set_str(g_session, "fujinet_external_addr", addr);
+    if (changed)
+        g_settings_dirty = 1;
+    return 1;
 }
 
 static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
@@ -738,6 +786,12 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
         case IDC_SET_FUJINET:
             settings_apply_checkbox(hwnd, IDC_SET_FUJINET, "enable_fujinet", 1);
             return 0;
+        case IDC_SET_EXTERNAL:
+            EnableWindow(GetDlgItem(hwnd, IDC_SET_ADDR),
+                         SendDlgItemMessageA(hwnd, IDC_SET_EXTERNAL,
+                                             BM_GETCHECK, 0, 0) ==
+                             BST_CHECKED);
+            return 0;
         case IDC_SET_AUDIO:
             settings_apply_checkbox(hwnd, IDC_SET_AUDIO, "enable_audio", 1);
             return 0;
@@ -749,6 +803,8 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
         }
         break;
     case WM_CLOSE:
+        if (!settings_save_external(hwnd))
+            return 0;
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
@@ -804,7 +860,7 @@ static void show_settings(HINSTANCE inst)
     g_settings_window = CreateWindowA(
         "CocoSettingsWindow", "Settings",
         WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME),
-        CW_USEDEFAULT, CW_USEDEFAULT, 380, 300, NULL, NULL, inst, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 380, 370, NULL, NULL, inst, NULL);
 
     CreateWindowExA(0, "STATIC", "Aspect ratio:", WS_CHILD | WS_VISIBLE, 16,
                     y, 120, 20, g_settings_window, NULL, inst, NULL);
@@ -837,6 +893,24 @@ static void show_settings(HINSTANCE inst)
     settings_checkbox(g_settings_window, inst, "FujiNet", IDC_SET_FUJINET, y,
                       cocosession_get_int(g_session, "enable_fujinet", 1));
     y += 28;
+    settings_checkbox(g_settings_window, inst, "Use external FujiNet",
+                      IDC_SET_EXTERNAL, y,
+                      cocosession_get_int(g_session, "fujinet_external", 0));
+    y += 28;
+    CreateWindowExA(0, "STATIC", "Address:port:", WS_CHILD | WS_VISIBLE, 32,
+                    y + 3, 90, 20, g_settings_window, NULL, inst, NULL);
+    {
+        HWND edit = CreateWindowExA(
+            WS_EX_CLIENTEDGE, "EDIT",
+            cocosession_get_str(g_session, "fujinet_external_addr", ""),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 126, y, 210,
+            24, g_settings_window, (HMENU)(INT_PTR)IDC_SET_ADDR, inst, NULL);
+        SendMessageA(edit, WM_SETFONT, (WPARAM)font, TRUE);
+        SendMessageA(edit, EM_SETCUEBANNER, FALSE, (LPARAM)L"127.0.0.1:65504");
+        EnableWindow(edit,
+                     cocosession_get_int(g_session, "fujinet_external", 0));
+    }
+    y += 32;
     settings_checkbox(g_settings_window, inst, "Sound", IDC_SET_AUDIO, y,
                       cocosession_get_int(g_session, "enable_audio", 1));
     y += 28;

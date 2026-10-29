@@ -420,6 +420,10 @@ static void action_fujinet_config(GSimpleAction *action, GVariant *param,
     CocoWindow *self = COCO_WINDOW(user_data);
     (void)action;
     (void)param;
+    if (cocosession_fujinet_external(self->session)) {
+        coco_window_toast(self, "FujiNet is external: use its own web UI");
+        return;
+    }
     coco_fujinet_config_show(GTK_WINDOW(self), self->session);
 }
 
@@ -429,6 +433,10 @@ static void action_fujinet_log(GSimpleAction *action, GVariant *param,
     CocoWindow *self = COCO_WINDOW(user_data);
     (void)action;
     (void)param;
+    if (cocosession_fujinet_external(self->session)) {
+        coco_window_toast(self, "FujiNet is external: see its own console");
+        return;
+    }
     coco_fujinet_log_show(GTK_WINDOW(self), self->session);
 }
 

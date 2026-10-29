@@ -295,6 +295,9 @@ endif()
 add_executable(input_test tests/input_test.c)
 target_link_libraries(input_test cocosession)
 
+add_executable(hostport_test tests/hostport_test.c)
+target_link_libraries(hostport_test cocosession)
+
 add_executable(boot_smoke tests/boot_smoke.c)
 target_link_libraries(boot_smoke cocosession)
 # roms_embedded.h (src/) and the generated table's declarations, so the test
@@ -364,6 +367,7 @@ target_include_directories(gimerow_test PRIVATE debugger
 target_compile_options(gimerow_test PRIVATE -Wall -Wextra -Wno-unused-function)
 
 add_test(NAME input COMMAND input_test)
+add_test(NAME hostport COMMAND hostport_test)
 add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME symtab COMMAND symtab_test)
