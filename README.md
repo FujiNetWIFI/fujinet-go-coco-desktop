@@ -77,6 +77,10 @@ compiling with `cmoc -i` (`--intermediate`), which is the flag that keeps
 the listing and linker map around; without it CMOC deletes both once the
 binary is linked. Available in every frontend.
 
+## External FujiNet
+
+A switch in Preferences makes the app connect to another FujiNet instance at a host:port you enter, e.g. `127.0.0.1:65504`, instead of starting the built-in one.
+
 ## Building
 
 ```sh
