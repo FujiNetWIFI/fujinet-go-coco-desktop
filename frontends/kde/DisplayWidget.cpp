@@ -147,6 +147,10 @@ void DisplayWidget::paintGL()
         m_serial = serial;
         m_fbW = w;
         m_fbH = h;
+        /* 0x00RRGGBB from the engine; Format_RGB32 needs 0xFFRRGGBB, or KWin
+         * composites the zero alpha as see-through, so force alpha on. */
+        for (size_t i = 0, n = (size_t)w * h; i < n; i++)
+            m_frame[i] |= 0xFF000000u;
     }
 
     QPainter p(this);
