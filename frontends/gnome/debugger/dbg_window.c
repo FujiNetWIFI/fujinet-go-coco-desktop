@@ -79,6 +79,8 @@ typedef struct {
     uint32_t *video_buf;
 
     guint tick_id;
+    int kick;            /* ticks to keep running while paused after an action */
+    gulong map_id, unmap_id, susp_id;
     uint64_t seen_serial;
     int was_paused;
     uint16_t mem_view_addr;
@@ -92,6 +94,45 @@ typedef struct {
     uint64_t fuji_last;
     gint64 fuji_refreshed_us;
 } DebuggerUI;
+
+/* The tick (one per display frame) runs only while the window is mapped and
+ * there is something to watch: the machine running (a breakpoint can stop it
+ * at any time), or a short while after an action while paused (a step lands
+ * asynchronously). A paused debugger with nothing happening costs no
+ * wakeups. */
+static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
+                        gpointer user_data);
+
+static void update_tick(DebuggerUI *ui)
+{
+    gboolean want = ui->window && gtk_widget_get_mapped(GTK_WIDGET(ui->window)) &&
+                    !gtk_window_is_suspended(ui->window) && ui->dbg &&
+                    (!cocodebug_is_paused(ui->dbg) || ui->kick > 0);
+
+    if (want && !ui->tick_id)
+        ui->tick_id = gtk_widget_add_tick_callback(GTK_WIDGET(ui->window),
+                                                   tick_cb, ui, NULL);
+    else if (!want && ui->tick_id) {
+        gtk_widget_remove_tick_callback(GTK_WIDGET(ui->window), ui->tick_id);
+        ui->tick_id = 0;
+    }
+}
+
+/* An action that will change what the panes show: keep ticking for a second
+ * or so after it (paused), until the result has landed. */
+static void kick(DebuggerUI *ui)
+{
+    ui->kick = 60;
+    update_tick(ui);
+}
+
+/* Force the next tick to rebuild the panes. */
+static void invalidate(DebuggerUI *ui)
+{
+    ui->seen_serial = 0;
+    kick(ui);
+}
+
 
 /* The core's XRGB8888 is a uint32 0x00RRGGBB, so on a little-endian host the
  * bytes run B,G,R,X -- GDK_MEMORY_B8G8R8X8, no per-pixel conversion. Same
@@ -183,7 +224,7 @@ static void on_row_activated(GtkListBox *box, GtkListBoxRow *row,
     cocodebug_breakpoint_toggle(ui->dbg, (uint16_t)GPOINTER_TO_UINT(addr));
     /* Rebuild so the marker appears immediately: the machine is paused, so
      * nothing else is going to prompt a refresh. */
-    ui->seen_serial = 0;
+    invalidate(ui);
 }
 
 static void refresh_disasm(DebuggerUI *ui)
@@ -242,7 +283,7 @@ static void on_src_row_activated(GtkListBox *box, GtkListBoxRow *row,
     lineno = g_object_get_data(G_OBJECT(row), "coco-line");
     cocodebug_source_breakpoint_toggle(ui->dbg, ui->src_displayed_file_id,
                                        GPOINTER_TO_INT(lineno));
-    ui->seen_serial = 0;
+    invalidate(ui);
 }
 
 /* Loads (and caches) file_id's text, then redraws the list with '>' on the
@@ -560,6 +601,8 @@ static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
 
     if (!ui->dbg)
         return G_SOURCE_CONTINUE;
+    if (ui->kick > 0)
+        ui->kick--;
 
     serial = cocodebug_stop_serial(ui->dbg);
     /* Rebuild when the engine has stopped somewhere new, or when it has just
@@ -573,7 +616,18 @@ static gboolean tick_cb(GtkWidget *widget, GdkFrameClock *clock,
         /* the traffic twice a second, whether or not the machine stops */
         refresh_fujinet(ui, FALSE);
     }
+    /* Paused with nothing pending: stop (this removes the callback). */
+    if (cocodebug_is_paused(ui->dbg) && ui->kick <= 0) {
+        ui->tick_id = 0;
+        return G_SOURCE_REMOVE;
+    }
     return G_SOURCE_CONTINUE;
+}
+
+static void on_window_state(GObject *obj, GParamSpec *pspec, gpointer user_data)
+{
+    (void)obj; (void)pspec;
+    update_tick(user_data);
 }
 
 static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num,
@@ -612,7 +666,7 @@ static void on_clear_bp(GtkButton *b, gpointer u)
     DebuggerUI *ui = u;
     (void)b;
     cocodebug_breakpoint_clear_all(ui->dbg);
-    ui->seen_serial = 0; /* redraw the markers */
+    invalidate(ui); /* redraw the markers */
 }
 
 static void on_fuji_clear(GtkButton *b, gpointer u)
@@ -648,7 +702,7 @@ static void load_symbols_done(GObject *source, GAsyncResult *result,
         gtk_label_set_text(ui->status, "Could not open symbol file");
         return;
     }
-    ui->seen_serial = 0; /* redraw the disassembly with the new labels */
+    invalidate(ui); /* redraw the disassembly with the new labels */
 }
 
 static void on_load_symbols(GtkButton *button, gpointer user_data)
@@ -677,7 +731,7 @@ static void on_clear_symbols(GtkButton *b, gpointer u)
     DebuggerUI *ui = u;
     (void)b;
     cocodebug_symbols_clear(ui->dbg);
-    ui->seen_serial = 0;
+    invalidate(ui);
 }
 
 static void on_src_file_changed(GObject *obj, GParamSpec *pspec,
@@ -764,7 +818,7 @@ static void load_source_done(GObject *source, GAsyncResult *result,
         g_clear_pointer(&ui->src_cached_path, g_free);
         g_clear_pointer(&ui->src_cached_lines, g_strfreev);
         rebuild_src_combo(ui);
-        ui->seen_serial = 0;
+        invalidate(ui);
     }
 }
 
@@ -800,7 +854,7 @@ static void on_clear_source(GtkButton *b, gpointer u)
     gtk_drop_down_set_model(ui->src_file_combo, NULL);
     gtk_widget_set_sensitive(GTK_WIDGET(ui->src_file_combo), FALSE);
     gtk_list_box_remove_all(ui->src_list);
-    ui->seen_serial = 0;
+    invalidate(ui);
 }
 
 static void go_to_mem_addr(DebuggerUI *ui)
@@ -811,7 +865,7 @@ static void go_to_mem_addr(DebuggerUI *ui)
 
     if (end != text)
         ui->mem_view_addr = (uint16_t)v;
-    ui->seen_serial = 0; /* force a redraw at the new address */
+    invalidate(ui); /* force a redraw at the new address */
 }
 
 static void on_mem_go(GtkButton *button, gpointer user_data)
@@ -826,6 +880,7 @@ static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code,
     (void)c;
     (void)code;
 
+    kick(ui);
     switch (keyval) {
     case GDK_KEY_F5:
         on_run_pause(NULL, ui);
@@ -859,6 +914,9 @@ static void on_closed(GtkWindow *window, gpointer user_data)
         gtk_widget_remove_tick_callback(GTK_WIDGET(ui->window), ui->tick_id);
         ui->tick_id = 0;
     }
+    g_signal_handler_disconnect(ui->window, ui->map_id);
+    g_signal_handler_disconnect(ui->window, ui->unmap_id);
+    g_signal_handler_disconnect(ui->window, ui->susp_id);
     /* The notebook outlives ui by a moment as the window goes. */
     g_signal_handlers_disconnect_by_data(ui->tabs, ui);
     /* Closing the window releases the debugger: leaving it engaged would cost
@@ -880,6 +938,7 @@ static GtkWidget *tool_button(const char *label, const char *tooltip,
     GtkWidget *b = gtk_button_new_with_mnemonic(label);
     gtk_widget_set_tooltip_text(b, tooltip);
     g_signal_connect(b, "clicked", cb, ui);
+    g_signal_connect_swapped(b, "clicked", G_CALLBACK(kick), ui);
     return b;
 }
 
@@ -1204,7 +1263,11 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     cocodebug_set_engaged(dbg, 1);
     cocodebug_pause(dbg);
 
-    ui->tick_id = gtk_widget_add_tick_callback(GTK_WIDGET(ui->window),
-                                               tick_cb, ui, NULL);
+    ui->map_id = g_signal_connect_swapped(ui->window, "map",
+                                          G_CALLBACK(kick), ui);
+    ui->unmap_id = g_signal_connect_swapped(ui->window, "unmap",
+                                            G_CALLBACK(update_tick), ui);
+    ui->susp_id = g_signal_connect(ui->window, "notify::suspended",
+                                   G_CALLBACK(on_window_state), ui);
     gtk_window_present(ui->window);
 }

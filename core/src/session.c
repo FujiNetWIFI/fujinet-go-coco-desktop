@@ -202,11 +202,38 @@ static void on_core_frame(const uint32_t *px, int w, int h, void *user)
 
     n = (size_t)w * (size_t)h;
     pthread_mutex_lock(&s->frame_mtx);
+    /* A frame identical to the one in the slot is not a new frame: the serial
+     * stays and nobody is called. The machine runs at 60 Hz whatever it shows
+     * and most of what a FujiNet cartridge shows does not move. */
+    if (s->frame_w == w && s->frame_h == h &&
+        memcmp(s->frame, px, n * sizeof(uint32_t)) == 0) {
+        pthread_mutex_unlock(&s->frame_mtx);
+        return;
+    }
     memcpy(s->frame, px, n * sizeof(uint32_t));
     s->frame_w = w;
     s->frame_h = h;
     s->frame_serial++;
     pthread_mutex_unlock(&s->frame_mtx);
+
+    pthread_mutex_lock(&s->cb_mtx);
+    if (s->frame_cb)
+        s->frame_cb(s->frame_cb_ctx);
+    pthread_mutex_unlock(&s->cb_mtx);
+}
+
+void cocosession_set_frame_callback(cocosession *s, cocosession_frame_cb cb,
+                                    void *ctx)
+{
+    pthread_mutex_lock(&s->cb_mtx);
+    s->frame_cb = cb;
+    s->frame_cb_ctx = ctx;
+    pthread_mutex_unlock(&s->cb_mtx);
+}
+
+uint64_t cocosession_frame_count(cocosession *s)
+{
+    return s->frame_count;
 }
 
 int cocosession_copy_frame(cocosession *s, uint32_t *dst,
@@ -286,6 +313,7 @@ static void *emu_thread_main(void *arg)
             cocodebug_session_frame(s);
         else
             cocohost_core_run_frame();
+        s->frame_count++;
 
         /* Pacing: one emulated frame per UI vsync tick while ticks arrive,
          * else the wall clock. Once-per-second diagnostics with
@@ -358,6 +386,7 @@ cocosession *cocosession_new(const cocosession_paths *paths)
 
     pthread_mutex_init(&s->lifecycle_mtx, NULL);
     pthread_mutex_init(&s->frame_mtx, NULL);
+    pthread_mutex_init(&s->cb_mtx, NULL);
     pthread_mutex_init(&s->vs_mtx, NULL);
     pthread_mutex_init(&s->start_mtx, NULL);
     coco_cond_init_monotonic(&s->vs_cv);
@@ -390,6 +419,7 @@ void cocosession_free(cocosession *s)
     cocodebug_destroy(s->debugger);
     pthread_mutex_destroy(&s->lifecycle_mtx);
     pthread_mutex_destroy(&s->frame_mtx);
+    pthread_mutex_destroy(&s->cb_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
     pthread_mutex_destroy(&s->start_mtx);
     pthread_cond_destroy(&s->vs_cv);

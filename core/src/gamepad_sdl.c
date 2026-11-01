@@ -145,14 +145,16 @@ static void *gamepad_thread_main(void *arg)
     cocosession *s = arg;
     gamepad_state *g = s->gamepad;
     int tick = 0;
+    int delay_ms = 100;
 
     coco_thread_setname("coco-gamepad");
     while (g->run) {
         int port;
         SDL_UpdateGamepads();
-        /* Device add/remove is rare; re-enumerate at ~4Hz, poll state at
-         * ~125Hz. Flush the (unused) event queue so it can't grow. */
-        if (tick++ % 32 == 0)
+        /* Device add/remove is rare; re-enumerate at ~4Hz (every 2 ticks with
+         * no pad, every 16 with one), poll state at ~60Hz. Flush the (unused)
+         * event queue so it can't grow. */
+        if (tick++ % (delay_ms >= 100 ? 2 : 16) == 0)
             sync_devices(s, g);
         SDL_PumpEvents();
         SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
@@ -190,7 +192,13 @@ static void *gamepad_thread_main(void *arg)
                 if (b1 != b1_was) cocosession_joystick_button(s, port, 1, b1);
             }
         }
-        SDL_Delay(8);
+        /* ~60 Hz while a pad is attached; with none there are no sticks to
+         * sample, only hotplug to notice, which can wait a tenth of a second.
+         * (Not SDL_WaitEventTimeout: SDL polls inside it at about 1 kHz.) */
+        pthread_mutex_lock(&g->mtx);
+        delay_ms = g->count > 0 ? 16 : 100;
+        pthread_mutex_unlock(&g->mtx);
+        SDL_Delay(delay_ms);
     }
     return NULL;
 }

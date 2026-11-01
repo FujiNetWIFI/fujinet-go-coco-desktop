@@ -81,6 +81,12 @@ struct cocosession {
     int frame_w;
     int frame_h;
     uint64_t frame_serial;
+    /* frame-ready callback; cb_mtx is held across the call so set(NULL)
+     * waits for one in flight */
+    pthread_mutex_t cb_mtx;
+    cocosession_frame_cb frame_cb;
+    void *frame_cb_ctx;
+    volatile uint64_t frame_count;   /* frames the machine has run */
 
     /* ---- vsync phase-lock (UI tick -> emulator pacing) ---- */
     pthread_mutex_t vs_mtx;

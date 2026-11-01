@@ -27,6 +27,7 @@
 #include <QVBoxLayout>
 
 #include "DisplayWidget.h"
+#include "SoftDisplayWidget.h"
 #include "debugger/DebuggerWindow.h"
 #include "FujiNetWindows.h"
 #include "SettingsDialog.h"
@@ -41,10 +42,14 @@ MainWindow::MainWindow(cocosession *session, QWidget *parent)
     setWindowTitle(QStringLiteral("FujiNet Go CoCo"));
     resize(1120, 840);
 
-    m_display = new DisplayWidget(session, this);
+    auto *gpu = new DisplayWidget(session, this);
+    m_display = gpu;
     m_noBios = buildNoBiosPage();
     m_stack = new QStackedWidget(this);
-    m_stack->addWidget(m_display);
+    m_stack->addWidget(gpu);
+    /* No usable GPU device: fall back to painting in software */
+    connect(gpu, &QRhiWidget::renderFailed, this, &MainWindow::useSoftwareDisplay,
+            Qt::QueuedConnection);
     m_stack->addWidget(m_noBios);
     setCentralWidget(m_stack);
     statusBar();
@@ -68,8 +73,24 @@ void MainWindow::applyDisplaySettings()
 {
     m_display->setAspectMode(
         cocosession_get_int(m_session, "aspect_mode",
-                            DisplayWidget::AspectTv43));
+                            CocoAspectTv43));
     m_display->setSmooth(cocosession_get_int(m_session, "smooth_scaling", 0));
+}
+
+void MainWindow::useSoftwareDisplay()
+{
+    if (dynamic_cast<SoftDisplayWidget *>(m_display))
+        return;
+    auto *old = m_display->widget();
+    auto *soft = new SoftDisplayWidget(m_session, this);
+    const bool current = m_stack->currentWidget() == old;
+    m_display = soft;
+    m_stack->insertWidget(0, soft);
+    m_stack->removeWidget(old);
+    old->deleteLater();   /* stops its feed */
+    if (current)
+        m_stack->setCurrentWidget(soft);
+    applyDisplaySettings();
 }
 
 void MainWindow::restartSession()
@@ -182,9 +203,9 @@ void MainWindow::showPage()
 {
     const bool bios = cocosession_is_running(m_session) ||
                       cocosession_has_system_roms(m_session, cocosession_machine(m_session));
-    m_stack->setCurrentWidget(bios ? static_cast<QWidget *>(m_display) : m_noBios);
+    m_stack->setCurrentWidget(bios ? m_display->widget() : m_noBios);
     if (bios)
-        m_display->setFocus();
+        m_display->widget()->setFocus();
 }
 
 /* Starts the machine once its ROMs are there (after an import). */
@@ -216,7 +237,7 @@ void MainWindow::rebuildTvInputMenu()
         m_tvInputGroup->addAction(act);
         connect(act, &QAction::triggered, this, [this, i] {
             cocosession_set_tv_input(m_session, i);
-            m_display->setFocus();
+            m_display->widget()->setFocus();
         });
     }
 }
@@ -298,7 +319,7 @@ void MainWindow::buildMenus()
         ccrGroup->addAction(act);
         connect(act, &QAction::triggered, this, [this, i] {
             cocosession_set_ccr(m_session, i);
-            m_display->setFocus();
+            m_display->widget()->setFocus();
         });
     }
 
@@ -318,7 +339,7 @@ void MainWindow::buildMenus()
             status(QStringLiteral("%1 (reset)")
                        .arg(QString::fromUtf8(cocosession_cpu_name(
                            cocosession_cpu(m_session)))));
-            m_display->setFocus();
+            m_display->widget()->setFocus();
         });
     }
 

@@ -197,6 +197,22 @@ int  cocosession_cpu(const cocosession *s);
 int  cocosession_copy_frame(cocosession *s, uint32_t *dst,
                             uint64_t *serial_inout, int *w_out, int *h_out);
 
+/* Ask to be told when a new frame is ready, for a frontend with no frame
+ * clock of its own: cb(ctx) runs on the machine thread after each frame is
+ * published. Keep it quick (post an event and return) and do not call into
+ * the session from it. Passing NULL stops the calls, and returns only after
+ * any call in flight has finished, so ctx may be freed right after. A frame
+ * identical to the previous one is not published again. */
+typedef void (*cocosession_frame_cb)(void *ctx);
+void cocosession_set_frame_callback(cocosession *s, cocosession_frame_cb cb,
+                                    void *ctx);
+
+/* Frames the machine has run since it started. Unlike copy_frame's serial it
+ * counts every frame, including the ones identical to their predecessor
+ * (which are not published again): use it to ask "is the machine running",
+ * not "is the picture changing". */
+uint64_t cocosession_frame_count(cocosession *s);
+
 /* Feed the UI's vsync ticks (frame-clock time, CLOCK_MONOTONIC ns). While a
  * steady ~60Hz tick stream arrives *and the machine is running at 60Hz*, the
  * emulator phase-locks one emulated frame per tick; otherwise it paces on the

@@ -12,7 +12,8 @@ enable_language(CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.4 COMPONENTS Widgets OpenGLWidgets QUIET)
+# Qt 6.7 for QRhiWidget (the GPU display); ShaderTools bakes its shaders.
+find_package(Qt6 6.7 COMPONENTS Widgets GuiPrivate ShaderTools QUIET)
 
 if(NOT Qt6_FOUND)
   message(STATUS "KDE frontend: Qt6 Widgets not found -- skipping")
@@ -27,13 +28,20 @@ add_executable(fujinet-go-coco-kde
   main.cpp
   MainWindow.cpp
   DisplayWidget.cpp
+  SoftDisplayWidget.cpp
+  FrameFeed.cpp
+  KeyForward.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
   debugger/DebuggerWindow.cpp
 )
 
 target_link_libraries(fujinet-go-coco-kde PRIVATE
-  cocosession Qt6::Widgets Qt6::OpenGLWidgets)
+  cocosession Qt6::Widgets Qt6::GuiPrivate)
+# The display's shaders, baked for every backend and embedded as resources.
+qt_add_shaders(fujinet-go-coco-kde "display_shaders"
+  PREFIX "/shaders"
+  FILES shaders/display.vert shaders/display.frag)
 # debugger/DebuggerWindow.cpp includes its own header by that path.
 target_include_directories(fujinet-go-coco-kde PRIVATE
                            "${CMAKE_CURRENT_SOURCE_DIR}")

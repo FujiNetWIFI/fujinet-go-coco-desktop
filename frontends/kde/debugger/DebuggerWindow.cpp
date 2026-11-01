@@ -313,9 +313,9 @@ public:
 
         /* 60ms is well under a human's notice, and cheaper than the frame
          * clock the GNOME window happens to have available. */
-        auto *timer = new QTimer(this);
-        connect(timer, &QTimer::timeout, this, [this] { poll(); });
-        timer->start(60);
+        m_timer = new QTimer(this);
+        connect(m_timer, &QTimer::timeout, this, [this] { poll(); });
+        /* started by showEvent: a hidden or minimised window polls nothing */
 
         /* Engaging switches the emulator loop to the path that honours
          * breakpoints; pausing immediately is what a user opening a debugger
@@ -332,7 +332,36 @@ public:
         cocodebug_set_engaged(m_dbg, 0);
     }
 
+protected:
+    void showEvent(QShowEvent *e) override
+    {
+        QWidget::showEvent(e);
+        updatePolling();
+    }
+    void hideEvent(QHideEvent *e) override
+    {
+        QWidget::hideEvent(e);
+        updatePolling();
+    }
+    void changeEvent(QEvent *e) override
+    {
+        QWidget::changeEvent(e);
+        if (e->type() == QEvent::WindowStateChange)
+            updatePolling();
+    }
+
 private:
+    void updatePolling()
+    {
+        const bool want = isVisible() && !isMinimized();
+        if (want && !m_timer->isActive()) {
+            m_timer->start(60);
+            poll();
+        } else if (!want) {
+            m_timer->stop();
+        }
+    }
+    QTimer *m_timer = nullptr;
     QWidget *buildFujinet()
     {
         auto *split = new QSplitter(Qt::Horizontal);

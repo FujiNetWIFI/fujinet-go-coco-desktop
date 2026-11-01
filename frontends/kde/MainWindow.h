@@ -10,7 +10,7 @@
 
 #include "cocosession.h"
 
-class DisplayWidget;
+class DisplayView;
 class QStackedWidget;
 
 class MainWindow : public QMainWindow {
@@ -22,6 +22,7 @@ private:
     void buildMenus();
     void rebuildTvInputMenu();
     void applyDisplaySettings();
+    void useSoftwareDisplay();
     void restartSession();
     void importDiskImage();
     void importBios(bool folder);
@@ -31,7 +32,7 @@ private:
     void status(const QString &message);
 
     cocosession *m_session;
-    DisplayWidget *m_display;
+    DisplayView *m_display;
     QStackedWidget *m_stack;
     QWidget *m_noBios;
     /* Rebuilt when the machine changes: a CoCo 2 has no RGB input, so that
