@@ -35,8 +35,12 @@ set(XROAR_VERSION "1.11")
 set(XROAR_URL "https://www.6809.org.uk/xroar/dl/xroar-${XROAR_VERSION}.tar.gz")
 set(XROAR_SHA256 "70270805ebd52c0b62237cc2f28b32b5c7df9764d10a7c7190de584cfc6e95af")
 
-set(FUJINET_COMMIT "13465cdd044304ff96ad41a5f029087b28bed17f")
-set(FUJINET_URL "https://github.com/FujiNetWIFI/fujinet-firmware")
+# fujinet-firmware: PR #2247's head (0c9f00c16), fork branch boip-idle-wait =
+# master f703133d0 + the BoIP idle-wait fix (idle wakeups ~1000/s -> ~100/s).
+# The previous pin was 13465cdd0 (in master). TEMPORARY: the pin returns to
+# master when #2247 merges. The fork URL resolves the SHA.
+set(FUJINET_COMMIT "0c9f00c16dff62d2b3c6b08821322f50642594db")
+set(FUJINET_URL "https://github.com/tschak909/fujinet-firmware")
 
 # coco_provide_dependency(NAME <n> PATH <p> SENTINEL <file> OVERRIDE <VAR>
 #                         RESULT <out>

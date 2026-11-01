@@ -174,7 +174,9 @@ modules:
         sha256: 70270805ebd52c0b62237cc2f28b32b5c7df9764d10a7c7190de584cfc6e95af
         strip-components: 1
         dest: third_party/xroar
+      # Same pin as cmake/Dependencies.cmake: PR #2247's head (master + the
+      # BoIP idle-wait fix), on the fork. Temporary: back to master on merge.
       - type: git
-        url: https://github.com/FujiNetWIFI/fujinet-firmware
-        commit: 13465cdd044304ff96ad41a5f029087b28bed17f
+        url: https://github.com/tschak909/fujinet-firmware
+        commit: 0c9f00c16dff62d2b3c6b08821322f50642594db
         dest: third_party/fujinet-firmware
