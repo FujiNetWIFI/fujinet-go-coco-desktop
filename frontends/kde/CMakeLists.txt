@@ -40,7 +40,7 @@ target_link_libraries(fujinet-go-coco-kde PRIVATE
   cocosession Qt6::Widgets Qt6::GuiPrivate)
 # The display's shaders, baked for every backend and embedded as resources.
 qt_add_shaders(fujinet-go-coco-kde "display_shaders"
-  PREFIX "/shaders"
+  PREFIX "/"
   FILES shaders/display.vert shaders/display.frag)
 # debugger/DebuggerWindow.cpp includes its own header by that path.
 target_include_directories(fujinet-go-coco-kde PRIVATE
