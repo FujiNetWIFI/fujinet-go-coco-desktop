@@ -22,6 +22,7 @@
 #define IDM_SETTINGS       210
 #define IDM_IMPORT_BIOS_DIR 211
 #define IDM_ROMS           212
+#define IDM_HELP           213
 
 /* Settings window child control ids. */
 #define IDC_SET_ASPECT     220
@@ -32,6 +33,8 @@
 #define IDC_SET_NOTE       225
 #define IDC_SET_EXTERNAL   226
 #define IDC_SET_ADDR       227
+#define IDC_SET_HELP       228
+#define IDC_LOG_HELP       229
 
 #define IDM_MACHINE_BASE   300
 #define IDM_TVINPUT_BASE   320

@@ -18,6 +18,7 @@ add_executable(fujinet-go-coco-macos MACOSX_BUNDLE
   main.m
   AppDelegate.m
   DisplayView.m
+  help/HelpWindow.m
   debugger/DebuggerWindow.m
   ${MACOS_ICON}
 )

@@ -30,6 +30,7 @@
 #include "SoftDisplayWidget.h"
 #include "debugger/DebuggerWindow.h"
 #include "FujiNetWindows.h"
+#include "help/HelpWindow.h"
 #include "SettingsDialog.h"
 
 #ifndef COCO_VERSION_STRING
@@ -40,6 +41,7 @@ MainWindow::MainWindow(cocosession *session, QWidget *parent)
     : QMainWindow(parent), m_session(session)
 {
     setWindowTitle(QStringLiteral("FujiNet Go CoCo"));
+    setProperty("cocoHelpContext", QStringLiteral("main"));
     resize(1120, 840);
 
     auto *gpu = new DisplayWidget(session, this);
@@ -188,6 +190,7 @@ QWidget *MainWindow::buildNoBiosPage()
     row->addStretch(1);
     row->addWidget(files);
     row->addWidget(folder);
+    row->addWidget(cocoHelpButton(QStringLiteral("nobios")));
     row->addStretch(1);
     v->addWidget(title);
     v->addSpacing(8);
@@ -204,6 +207,7 @@ void MainWindow::showPage()
     const bool bios = cocosession_is_running(m_session) ||
                       cocosession_has_system_roms(m_session, cocosession_machine(m_session));
     m_stack->setCurrentWidget(bios ? m_display->widget() : m_noBios);
+    setProperty("cocoHelpContext", bios ? QStringLiteral("main") : QStringLiteral("nobios"));
     if (bios)
         m_display->widget()->setFocus();
 }
@@ -366,6 +370,18 @@ void MainWindow::buildMenus()
         QTimer::singleShot(500, settingsAct, &QAction::trigger);
 
     QMenu *help = menuBar()->addMenu(QStringLiteral("&Help"));
+    {
+        /* works from every window of the app (the Debugger has the keyboard
+         * too) */
+        QAction *helpAct = help->addAction(QStringLiteral("FujiNet Go CoCo &Help"));
+        helpAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H));
+        helpAct->setShortcutContext(Qt::ApplicationShortcut);
+        addAction(helpAct);
+        connect(helpAct, &QAction::triggered, this, [this] {
+            cocoHelpFor(QApplication::activeWindow() ? QApplication::activeWindow() : this);
+        });
+    }
+    help->addSeparator();
     help->addAction(QStringLiteral("&About"), this, [this] {
         QMessageBox::about(
             this, QStringLiteral("FujiNet Go CoCo"),

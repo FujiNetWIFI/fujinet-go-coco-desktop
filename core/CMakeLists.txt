@@ -230,6 +230,21 @@ add_custom_command(
   VERBATIM)
 
 # ---- the session library ---------------------------------------------------
+# The Help, embedded: data/help/help.md as topics of styled spans
+# (core/include/cocohelp.h), which every frontend lays out with its own
+# toolkit. help_data.h declares the table; the build generates it.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(COCO_HELP_C "${CMAKE_BINARY_DIR}/generated/help_content.c")
+add_custom_command(
+  OUTPUT "${COCO_HELP_C}"
+  COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          --src "${CMAKE_SOURCE_DIR}/data/help/help.md"
+          --out-c "${COCO_HELP_C}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/help/make-help.py"
+          "${CMAKE_SOURCE_DIR}/data/help/help.md"
+  COMMENT "Help"
+  VERBATIM)
+
 add_library(cocosession STATIC
   xroar/coco_host.c
   src/session.c
@@ -241,6 +256,8 @@ add_library(cocosession STATIC
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
+  src/help.c
+  "${COCO_HELP_C}"
   debugger/debugger.c
   debugger/m6809dasm.c
   debugger/cocovideo.c
@@ -354,6 +371,10 @@ add_executable(drivewire_smoke tests/drivewire_smoke.c)
 target_link_libraries(drivewire_smoke cocosession)
 target_include_directories(drivewire_smoke PRIVATE src)
 
+# The built-in Help covers every setting, key and context.
+add_executable(help_test tests/help_test.c)
+target_link_libraries(help_test cocosession)
+
 add_executable(video_test tests/video_test.c)
 target_link_libraries(video_test cocosession)
 target_include_directories(video_test PRIVATE src)
@@ -368,6 +389,7 @@ target_compile_options(gimerow_test PRIVATE -Wall -Wextra -Wno-unused-function)
 
 add_test(NAME input COMMAND input_test)
 add_test(NAME hostport COMMAND hostport_test)
+add_test(NAME help COMMAND help_test)
 add_test(NAME session COMMAND session_test)
 add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME symtab COMMAND symtab_test)

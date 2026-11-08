@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "resource.h"
+#include "help/help_window.h"
 
 #define ROMS_CLASS "CocoRomsWindow"
 
@@ -118,9 +119,9 @@ int coco_import_bios(HWND owner, cocosession *session, int folder)
 
 /* ---- ROMs window ------------------------------------------------------------- */
 
-enum { ID_FILES = 100, ID_FOLDER, ID_LIST, ID_CLOSE };
+enum { ID_FILES = 100, ID_FOLDER, ID_LIST, ID_CLOSE, ID_HELP };
 
-static HWND g_win, g_note, g_path, g_files, g_folder, g_list, g_close;
+static HWND g_win, g_note, g_path, g_files, g_folder, g_list, g_close, g_help;
 static cocosession *g_session;
 static coco_prefs_imported_fn g_imported;
 static int g_dpi = 96;
@@ -161,6 +162,7 @@ static void layout(const RECT *c)
     MoveWindow(g_list, m, m + S(132), w, c->bottom - m - S(132) - S(44), TRUE);
     MoveWindow(g_close, c->right - m - S(96), c->bottom - m - S(28), S(96),
                S(28), TRUE);
+    MoveWindow(g_help, c->right - m - S(96) - S(8) - S(80), c->bottom - m - S(28), S(80), S(28), TRUE);
     memset(&col, 0, sizeof(col));
     col.mask = LVCF_WIDTH;
     col.cx = w - S(90) - S(110) - GetSystemMetrics(SM_CXVSCROLL) - S(4);
@@ -187,6 +189,7 @@ static LRESULT CALLBACK roms_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         switch (LOWORD(wp)) {
         case ID_FILES:  import_roms(0); return 0;
         case ID_FOLDER: import_roms(1); return 0;
+        case ID_HELP: coco_help_for(hwnd); return 0;
         case ID_CLOSE:
         case IDCANCEL:
             DestroyWindow(hwnd);
@@ -287,6 +290,8 @@ void coco_roms_show(HWND parent, cocosession *session, coco_prefs_imported_fn im
         col.pszText = (char *)cols[i];
         SendMessageA(g_list, LVM_INSERTCOLUMNA, (WPARAM)i, (LPARAM)&col);
     }
+    g_help = child("BUTTON", "Help", WS_TABSTOP, ID_HELP, inst);
+    coco_help_set_context(g_win, "prefs/ROMs", 1);
     g_close = child("BUTTON", "Close", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_CLOSE, inst);
 
     GetClientRect(g_win, &cr);

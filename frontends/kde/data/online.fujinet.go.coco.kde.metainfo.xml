@@ -17,7 +17,8 @@
       port -- DriveWire carried on loopback TCP -- so HDB-DOS finds it as its
       boot device and the machine drops straight into FujiNet's CONFIG. Both
       the Color Computer 2 and the Color Computer 3 are supported, and you can
-      switch between them without restarting.
+      switch between them without restarting. Built-in, searchable Help covers
+      all of it.
     </p>
   </description>
   <launchable type="desktop-id">online.fujinet.go.coco.kde.desktop</launchable>

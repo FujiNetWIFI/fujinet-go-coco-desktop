@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "window.h"
+#include "help/help_window.h"
 
 #define MAX_ROM_ROWS 8
 
@@ -232,6 +233,7 @@ static AdwPreferencesPage *build_roms_page(PrefsState *st)
                 gtk_widget_set_valign(dir, GTK_ALIGN_CENTER);
                 gtk_box_append(GTK_BOX(box), files);
                 gtk_box_append(GTK_BOX(box), dir);
+                gtk_box_append(GTK_BOX(box), coco_help_button("prefs/ROMs"));
                 adw_preferences_group_set_header_suffix(group, box);
             }
             adw_preferences_page_add(page, group);
@@ -333,7 +335,9 @@ void coco_prefs_show(CocoWindow *parent, cocosession *session,
     state->session = session;
     state->display_changed = display_changed;
 
+    adw_preferences_page_set_name(page, "Machine");
     adw_preferences_group_set_title(machine, "Machine");
+    adw_preferences_group_set_header_suffix(machine, coco_help_button("prefs/Machine"));
     adw_preferences_group_set_description(
         machine, "Switching machines resets it, with the matching HDB-DOS "
                  "Becker ROM. FujiNet stays connected.");

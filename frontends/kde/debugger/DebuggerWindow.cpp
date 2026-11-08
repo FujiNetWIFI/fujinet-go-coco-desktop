@@ -35,6 +35,7 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QShortcut>
+#include "../help/HelpWindow.h"
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
@@ -141,7 +142,13 @@ public:
         auto *outer = new QVBoxLayout(this);
 
         m_status = new QLabel(QStringLiteral("Running"), this);
-        outer->addWidget(m_status);
+        {
+            auto *statusRow = new QHBoxLayout;
+            statusRow->addWidget(m_status, 1);
+            statusRow->addWidget(cocoHelpButton(QString()));
+            outer->addLayout(statusRow);
+        }
+        new QShortcut(QKeySequence(Qt::Key_F1), this, [this] { cocoHelpFor(this); });
 
         auto *cpuPage = new QWidget;
         auto *cpu = new QVBoxLayout(cpuPage);
@@ -293,7 +300,14 @@ public:
         const int tab = tabFromEnv();
         if (tab >= 0)
             m_tabs->setCurrentIndex(tab);
-        connect(m_tabs, &QTabWidget::currentChanged, this, [this](int i) {
+        /* Help's contexts (cocohelp.h), one per tab */
+        auto setHelpContext = [this](int page) {
+            setProperty("cocoHelpContext", page == kTabFujinet ? QStringLiteral("debugger/fujinet")
+                                                               : QStringLiteral("debugger/cpu"));
+        };
+        setHelpContext(m_tabs->currentIndex());
+        connect(m_tabs, &QTabWidget::currentChanged, this, [this, setHelpContext](int i) {
+            setHelpContext(i);
             if (i == kTabFujinet)
                 refreshFujinet(false);
         });

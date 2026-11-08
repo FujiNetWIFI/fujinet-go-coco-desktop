@@ -46,6 +46,7 @@
 #include "cocosession.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
+#include "help/help_window.h"
 #include "prefs.h"
 #include "resource.h"
 
@@ -56,7 +57,7 @@ static HWND g_log_window;
 static HWND g_log_edit;
 
 static HWND g_display;
-static HWND g_nobios, g_bios_title, g_bios_text, g_bios_files, g_bios_folder;
+static HWND g_nobios, g_bios_title, g_bios_text, g_bios_files, g_bios_folder, g_bios_help;
 static HFONT g_ui_font, g_title_font;
 static HICON g_big_icon;
 static int g_dpi = 96;
@@ -74,7 +75,7 @@ static void start_machine(void);
  * its system ROMs: a title, what to do, and the two import buttons, centred
  * in a child window that covers the client. */
 
-enum { IDC_BIOS_FILES = 240, IDC_BIOS_FOLDER };
+enum { IDC_BIOS_FILES = 240, IDC_BIOS_FOLDER, IDC_BIOS_HELP };
 
 static const char k_nobios_title[] = "No CoCo BIOS";
 static const char k_nobios_text[] =
@@ -119,6 +120,7 @@ static void nobios_layout(int aw, int ah)
     const int title_h = text_height(g_title_font, k_nobios_title, width);
     const int desc_h = text_height(g_ui_font, k_nobios_text, width);
     const int bw1 = button_width("Import BIOS"), bw2 = button_width("Import a Folder");
+    const int bw3 = button_width("Help");
     const int total = icon + S(16) + title_h + S(10) + desc_h + S(24) + bh;
     const int x0 = (aw - width) / 2, cx = aw / 2;
     int y = (ah - total) / 2;
@@ -130,8 +132,10 @@ static void nobios_layout(int aw, int ah)
     y += title_h + S(10);
     MoveWindow(g_bios_text, x0, y, width, desc_h, TRUE);
     y += desc_h + S(24);
-    MoveWindow(g_bios_files, cx - (bw1 + S(12) + bw2) / 2, y, bw1, bh, TRUE);
-    MoveWindow(g_bios_folder, cx - (bw1 + S(12) + bw2) / 2 + bw1 + S(12), y, bw2, bh,
+    MoveWindow(g_bios_files, cx - (bw1 + S(12) + bw2 + S(12) + bw3) / 2, y, bw1, bh, TRUE);
+    MoveWindow(g_bios_folder, cx - (bw1 + S(12) + bw2 + S(12) + bw3) / 2 + bw1 + S(12), y, bw2, bh,
+               TRUE);
+    MoveWindow(g_bios_help, cx - (bw1 + S(12) + bw2 + S(12) + bw3) / 2 + bw1 + S(12) + bw2 + S(12), y, bw3, bh,
                TRUE);
     InvalidateRect(g_nobios, NULL, TRUE);
 }
@@ -217,9 +221,12 @@ static void create_nobios(HINSTANCE inst)
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 1, 1,
                                   g_nobios, (HMENU)(INT_PTR)IDC_BIOS_FOLDER, inst,
                                   NULL);
+    g_bios_help = CreateWindowA("BUTTON", "Help", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 1, 1, g_nobios,
+                                (HMENU)(INT_PTR)IDC_BIOS_HELP, inst, NULL);
     SendMessageA(g_bios_title, WM_SETFONT, (WPARAM)g_title_font, TRUE);
     SendMessageA(g_bios_text, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_bios_files, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
+    SendMessageA(g_bios_help, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
     SendMessageA(g_bios_folder, WM_SETFONT, (WPARAM)g_ui_font, TRUE);
 }
 
@@ -241,6 +248,8 @@ static void show_page(void)
     const int bios = !need_bios();
     ShowWindow(g_display, bios ? SW_SHOW : SW_HIDE);
     ShowWindow(g_nobios, bios ? SW_HIDE : SW_SHOW);
+    /* F1 is not bound by the machine here; Help opens the page that shows */
+    coco_help_set_context(g_hwnd, bios ? "main" : "nobios", 0);
     layout_display();
 }
 
@@ -459,13 +468,19 @@ static void show_fujinet_config(void)
 #define LOG_TIMER_ID 1
 
 static int g_log_first; /* the next fill is the first: go to the bottom */
+#define LOG_BAR 34
+static HWND g_log_help;
 
 static LRESULT CALLBACK log_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_SIZE:
-        MoveWindow(g_log_edit, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+        MoveWindow(g_log_edit, 0, LOG_BAR, LOWORD(lp), HIWORD(lp) > LOG_BAR ? HIWORD(lp) - LOG_BAR : 0, TRUE);
+        if (g_log_help) MoveWindow(g_log_help, LOWORD(lp) - 84, 4, 76, LOG_BAR - 8, TRUE);
         return 0;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDC_LOG_HELP) { coco_help_for(hwnd); return 0; }
+        break;
     case WM_TIMER: {
         static char buf[128 * 1024];
         static char shown[128 * 1024];
@@ -558,6 +573,15 @@ static void show_fujinet_log(HINSTANCE inst)
         0, 0, 0, 0, g_log_window, NULL, inst, NULL);
     SendMessageA(g_log_edit, WM_SETFONT, (WPARAM)GetStockObject(ANSI_FIXED_FONT),
                 TRUE);
+    g_log_help = CreateWindowExA(0, "BUTTON", "Help", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10,
+                                 g_log_window, (HMENU)(INT_PTR)IDC_LOG_HELP, inst, NULL);
+    SendMessageA(g_log_help, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    coco_help_set_context(g_log_window, "fujilog", 1);
+    {
+        RECT crc;
+        GetClientRect(g_log_window, &crc);
+        SendMessageA(g_log_window, WM_SIZE, 0, MAKELPARAM(crc.right, crc.bottom));
+    }
     g_log_first = 1;
     SetTimer(g_log_window, LOG_TIMER_ID, 1000, NULL);
     SendMessageA(g_log_window, WM_TIMER, LOG_TIMER_ID, 0);
@@ -677,6 +701,8 @@ static HMENU build_menu(void)
     AppendMenuA(fujinet, MF_STRING, IDM_FUJINET_LOG, "Console Log...");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)fujinet, "&FujiNet");
 
+    AppendMenuA(help, MF_STRING, IDM_HELP, "FujiNet Go CoCo &Help\tCtrl+Shift+H");
+    AppendMenuA(help, MF_SEPARATOR, 0, NULL);
     AppendMenuA(help, MF_STRING, IDM_ABOUT, "About FujiNet Go CoCo");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)help, "&Help");
     return bar;
@@ -768,6 +794,7 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
     switch (msg) {
     case WM_COMMAND:
         switch (LOWORD(wp)) {
+        case IDC_SET_HELP: coco_help_for(hwnd); return 0;
         case IDC_SET_ASPECT:
             if (HIWORD(wp) == CBN_SELCHANGE) {
                 int sel = (int)SendMessageA(GetDlgItem(hwnd, IDC_SET_ASPECT),
@@ -860,7 +887,7 @@ static void show_settings(HINSTANCE inst)
     g_settings_window = CreateWindowA(
         "CocoSettingsWindow", "Settings",
         WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME),
-        CW_USEDEFAULT, CW_USEDEFAULT, 380, 370, NULL, NULL, inst, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 380, 420, NULL, NULL, inst, NULL);
 
     CreateWindowExA(0, "STATIC", "Aspect ratio:", WS_CHILD | WS_VISIBLE, 16,
                     y, 120, 20, g_settings_window, NULL, inst, NULL);
@@ -916,6 +943,13 @@ static void show_settings(HINSTANCE inst)
     y += 28;
     settings_checkbox(g_settings_window, inst, "Gamepads", IDC_SET_GAMEPAD, y,
                       cocosession_get_int(g_session, "enable_gamepad", 1));
+    y += 36;
+    {
+        HWND hb = CreateWindowExA(0, "BUTTON", "Help", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                  16, y, 80, 26, g_settings_window, (HMENU)(INT_PTR)IDC_SET_HELP, inst, NULL);
+        SendMessageA(hb, WM_SETFONT, (WPARAM)font, TRUE);
+        coco_help_set_context(g_settings_window, "prefs/Machine", 1);
+    }
 
     ShowWindow(g_settings_window, SW_SHOW);
 }
@@ -977,6 +1011,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_ROMS:
             coco_roms_show(hwnd, g_session, start_machine);
             break;
+        case IDC_BIOS_HELP: coco_help_show(hwnd, "nobios"); break;
+        case IDM_HELP: coco_help_for(hwnd); break;
         case IDM_FUJINET_CONFIG: show_fujinet_config(); break;
         case IDM_FUJINET_LOG:
             show_fujinet_log((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
@@ -1077,6 +1113,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         /* The debugger's F5/F7/F8/Shift+F8 accelerators get first refusal
          * while its window (or one of its fields) has the focus. */
         if (coco_debugger_pretranslate(&msg))
+            continue;
+        if (coco_help_pretranslate(&msg))
             continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);

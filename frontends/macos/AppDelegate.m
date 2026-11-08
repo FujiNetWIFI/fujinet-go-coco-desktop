@@ -25,6 +25,7 @@
 #import <WebKit/WebKit.h>
 
 #import "DisplayView.h"
+#import "help/HelpWindow.h"
 #import "debugger/DebuggerWindow.h"
 
 #include <stdlib.h>
@@ -106,8 +107,9 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSButton *folder = [NSButton buttonWithTitle:@"Import a Folder…"
                                           target:self
                                           action:@selector(importBiosFromFolder:)];
+    NSButton *helpBtn = CocoHelpButton(@"nobios");
     NSStackView *buttons =
-        [NSStackView stackViewWithViews:@[ files, folder ]];
+        [NSStackView stackViewWithViews:@[ files, folder, helpBtn ]];
     buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     buttons.spacing = 12;
     NSStackView *column =
@@ -135,6 +137,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
                                           cocosession_machine(_session));
     _display.hidden = !ok;
     _noRoms.hidden = ok;
+    CocoSetHelpContext(_window, ok ? @"main" : @"nobios");
     if (ok)
         [_window makeFirstResponder:_display];
 }
@@ -377,7 +380,16 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     _settingsWindow.title = @"Settings";
     _settingsWindow.releasedWhenClosed = NO;
     _settingsWindow.delegate = self;
-    _settingsWindow.contentView = root;
+    {
+        /* the settings over a strip with the Help button */
+        NSButton *helpBtn = CocoHelpButton(@"prefs/Machine");
+        NSStackView *wrap = [NSStackView stackViewWithViews:@[root, helpBtn]];
+        wrap.orientation = NSUserInterfaceLayoutOrientationVertical;
+        wrap.alignment = NSLayoutAttributeLeading;
+        wrap.edgeInsets = NSEdgeInsetsMake(0, 16, 12, 16);
+        _settingsWindow.contentView = wrap;
+        CocoSetHelpContext(_settingsWindow, @"prefs/Machine");
+    }
     [_settingsWindow center];
     [_settingsWindow makeKeyAndOrderFront:nil];
 }
@@ -562,7 +574,7 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     _logWindow.title = @"FujiNet Console Log";
     _logWindow.releasedWhenClosed = NO;
 
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:frame];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 36, frame.size.width, frame.size.height - 36)];
     scroll.hasVerticalScroller = YES;
     scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _logView = [[NSTextView alloc] initWithFrame:frame];
@@ -570,7 +582,17 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     _logView.font = [NSFont monospacedSystemFontOfSize:11
                                                 weight:NSFontWeightRegular];
     scroll.documentView = _logView;
-    _logWindow.contentView = scroll;
+    {
+        /* the log over a strip with the Help button */
+        NSView *box = [[NSView alloc] initWithFrame:frame];
+        NSButton *help = CocoHelpButton(@"fujilog");
+        [help setFrameOrigin:NSMakePoint(10, 6)];
+        help.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+        [box addSubview:scroll];
+        [box addSubview:help];
+        _logWindow.contentView = box;
+    }
+    CocoSetHelpContext(_logWindow, @"fujilog");
 
     _logTimer = [NSTimer
         scheduledTimerWithTimeInterval:1.0
@@ -864,7 +886,24 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     [menubar addItem:windowItem];
     NSApp.windowsMenu = windowMenu;
 
+    NSMenuItem *helpItem = [[NSMenuItem alloc] init];
+    NSMenu *help = [[NSMenu alloc] initWithTitle:@"Help"];
+    /* openHelp:, not showHelp: (AppKit's: "Help isn't available") */
+    [help addItem:[self item:@"FujiNet Go CoCo Help" action:@selector(openHelp:) key:@"?"]];
+    helpItem.submenu = help;
+    [menubar addItem:helpItem];
+
     NSApp.mainMenu = menubar;
+    NSApp.helpMenu = help;
+    /* the Help menu's search field finds the Help's sections too */
+    [NSApp registerUserInterfaceItemSearchHandler:[CocoHelpWindow shared]];
+}
+
+/* For the window in front: Settings, the debugger's tab ... */
+- (void)openHelp:(id)sender
+{
+    (void)sender;
+    [[CocoHelpWindow shared] showFor:[NSApp keyWindow]];
 }
 
 - (void)rebuildMenus

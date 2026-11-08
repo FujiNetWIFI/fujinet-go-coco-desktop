@@ -9,6 +9,7 @@
  */
 
 #include "window.h"
+#include "help/help_window.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -106,6 +107,34 @@ static gboolean forward_key(CocoWindow *self, guint keyval,
     return TRUE;
 }
 
+/* The Help context the main window shows now: "main", or "prefs/Machine"
+ * while Preferences are open. */
+const char *coco_window_help_context(CocoWindow *self)
+{
+    AdwDialog *d = adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self));
+    if (d && ADW_IS_PREFERENCES_DIALOG(d)) {
+        static char ctx[64];
+        const char *page = adw_preferences_dialog_get_visible_page_name(ADW_PREFERENCES_DIALOG(d));
+        g_snprintf(ctx, sizeof ctx, "prefs/%s", page ? page : "Machine");
+        return ctx;
+    }
+    if (g_strcmp0(gtk_stack_get_visible_child_name(self->stack), "nobios") == 0)
+        return "nobios";
+    return "main";
+}
+
+/* app.help: every window's Ctrl+Shift+H, for what it shows. Not a cast of
+ * the active window: it can be the debugger or the log. */
+static void action_help(GSimpleAction *a, GVariant *p, gpointer user_data)
+{
+    (void)a; (void)p;
+    coco_help_for(gtk_application_get_active_window(GTK_APPLICATION(user_data)));
+}
+
+static const GActionEntry app_actions[] = {
+    { "help", action_help, NULL, NULL, NULL, { 0 } },
+};
+
 static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
                                guint keycode, GdkModifierType state,
                                gpointer user_data)
@@ -113,6 +142,14 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
     CocoWindow *self = COCO_WINDOW(user_data);
     (void)controller;
     (void)keycode;
+
+    /* F1 is an COCO function key in the window itself, and Help while
+     * Preferences or another dialog is open */
+    if (keyval == GDK_KEY_F1 && adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(self)) &&
+        !(state & GDK_MODIFIER_MASK & ~GDK_LOCK_MASK)) {
+        coco_help_for(GTK_WINDOW(self));
+        return TRUE;
+    }
 
     switch (keyval) {
     case GDK_KEY_F10: /* open the primary menu */
@@ -410,6 +447,7 @@ static GtkWidget *nobios_page(CocoWindow *self)
     gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
     gtk_box_append(GTK_BOX(box), files);
     gtk_box_append(GTK_BOX(box), folder);
+    gtk_box_append(GTK_BOX(box), coco_help_button("nobios"));
     adw_status_page_set_child(ADW_STATUS_PAGE(page), box);
     return page;
 }
@@ -542,6 +580,7 @@ static GMenu *build_menu(cocosession *session)
     g_menu_append_section(menu, "FujiNet", G_MENU_MODEL(fujinet));
 
     g_menu_append(tail, "Preferences…", "win.preferences");
+    g_menu_append(tail, "FujiNet Go CoCo Help", "app.help");
     g_menu_append(tail, "About FujiNet Go CoCo", "win.about");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(tail));
 
@@ -612,6 +651,13 @@ GtkWidget *coco_window_new(AdwApplication *app, cocosession *session)
 
     g_action_map_add_action_entries(G_ACTION_MAP(self), win_actions,
                                     G_N_ELEMENTS(win_actions), self);
+    if (!g_action_map_lookup_action(G_ACTION_MAP(app), "help"))
+        g_action_map_add_action_entries(G_ACTION_MAP(app), app_actions,
+                                        G_N_ELEMENTS(app_actions), app);
+    {
+        static const char *const help_accels[] = { "<Control><Shift>h", NULL };
+        gtk_application_set_accels_for_action(GTK_APPLICATION(app), "app.help", help_accels);
+    }
     add_radio_action(self, "machine", cocosession_machine(session),
                      G_CALLBACK(action_machine));
     add_radio_action(self, "tv-input", cocosession_tv_input(session),

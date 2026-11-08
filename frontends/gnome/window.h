@@ -17,6 +17,10 @@ G_DECLARE_FINAL_TYPE(CocoWindow, coco_window, COCO, WINDOW,
 
 GtkWidget *coco_window_new(AdwApplication *app, cocosession *session);
 void coco_window_toast(CocoWindow *self, const char *message);
+
+/* The Help context the main window shows now: "main", or "prefs/Machine"
+ * while Preferences are open. */
+const char *coco_window_help_context(CocoWindow *self);
 void coco_window_restart_session(CocoWindow *self);
 /* The picture, or the No-BIOS page when the machine has no ROMs to boot. */
 void coco_window_show_page(CocoWindow *self);
@@ -29,5 +33,9 @@ GtkFileDialog *coco_file_dialog(const char *title, const char *filter_name,
 /* main.c: the icon name to use, which differs between an installed app and
  * one running out of the build tree. */
 const char *coco_icon_name(void);
+
+/* The Help context the main window shows now: "main", or "prefs/Machine"
+ * while Preferences are open. */
+const char *coco_window_help_context(CocoWindow *self);
 
 G_END_DECLS

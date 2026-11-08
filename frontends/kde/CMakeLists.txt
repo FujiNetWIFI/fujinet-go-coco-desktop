@@ -33,6 +33,7 @@ add_executable(fujinet-go-coco-kde
   KeyForward.cpp
   SettingsDialog.cpp
   FujiNetWindows.cpp
+  help/HelpWindow.cpp
   debugger/DebuggerWindow.cpp
 )
 

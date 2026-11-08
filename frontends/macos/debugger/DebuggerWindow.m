@@ -42,6 +42,7 @@
  */
 
 #import "DebuggerWindow.h"
+#import "../help/HelpWindow.h"
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -260,10 +261,19 @@ static NSImage *imageFromXRGB(const uint32_t *px, int w, int h)
     return (int)[_tabs indexOfTabViewItem:_tabs.selectedTabViewItem];
 }
 
+/* Help's contexts (cocohelp.h): the tab identifiers are the contexts' ends */
+- (void)updateHelpContext
+{
+    NSString *ident = _tabs.selectedTabViewItem.identifier;
+    if (ident)
+        CocoSetHelpContext(_window, [@"debugger/" stringByAppendingString:ident]);
+}
+
 - (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)item
 {
     (void)tabView;
     (void)item;
+    [self updateHelpContext];
     if ([self currentTab] == TAB_FUJINET)
         [self refreshFujinet:NO];
 }
@@ -485,10 +495,12 @@ static NSView *tabPage(NSView *content)
     _status = [self label:@"Running"];
     _status.alignment = NSTextAlignmentRight;
 
+    NSButton *helpBtn = CocoHelpButton(nil);
+    [helpBtn setRefusesFirstResponder:YES];
     NSStackView *toolbar = [NSStackView stackViewWithViews:@[
         _runBtn, stepBtn, stepOverBtn, stepOutBtn, _stepLineBtn,
         _stepOverLineBtn, clearBpBtn, loadSymBtn, clearSymBtn, loadSrcBtn,
-        clearSrcBtn, _status
+        clearSrcBtn, _status, helpBtn
     ]];
     toolbar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     toolbar.spacing = 8;
@@ -615,6 +627,7 @@ static NSView *tabPage(NSView *content)
     if (tab >= 0)
         [_tabs selectTabViewItemAtIndex:tab];
     _tabs.delegate = self;
+    [self updateHelpContext];
 
     _window.contentView = _tabs;
     [_window setContentSize:NSMakeSize(1500, 860)];

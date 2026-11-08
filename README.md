@@ -52,6 +52,14 @@ and reports from real users on those platforms are very welcome.
 - Settings/Preferences windows (GNOME, KDE, macOS ⌘,, Windows) for aspect
   ratio, smooth scaling, FujiNet enable and gamepad enable.
 
+### Built-in Help
+
+**Help ▸ FujiNet Go CoCo Help** (Ctrl+Shift+H, ⌘? on a Mac) opens a searchable
+Help, and the Help buttons in Preferences, the debugger and the console log open
+the topic for what they show. The text is [data/help/help.md](data/help/help.md),
+which GitHub shows as it is; the build embeds it and every frontend lays it out
+natively.
+
 ### Developer debugger (F12)
 
 Breakpoints, pause/step into/over/out, run-to, a 6809/HD6309 disassembler,

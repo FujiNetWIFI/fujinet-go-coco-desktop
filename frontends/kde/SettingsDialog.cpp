@@ -13,9 +13,11 @@
  */
 
 #include "SettingsDialog.h"
+#include "help/HelpWindow.h"
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QShortcut>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -200,7 +202,17 @@ SettingsDialog::SettingsDialog(cocosession *session, QWidget *parent)
         tabs->setCurrentIndex(1);
     outer->addWidget(tabs);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+    /* Help, F1 and Ctrl+Shift+H (the app's shortcuts don't reach a modal dialog) */
+    auto pageContext = [tabs](int i) {
+        return i == 1 ? QStringLiteral("prefs/ROMs") : QStringLiteral("prefs/Machine");
+    };
+    setProperty("cocoHelpContext", pageContext(tabs->currentIndex()));
+    connect(tabs, &QTabWidget::currentChanged, this,
+            [this, pageContext](int i) { setProperty("cocoHelpContext", pageContext(i)); });
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close | QDialogButtonBox::Help, this);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::helpRequested, this, [this] { cocoHelpFor(this); });
+    for (const char *key : { "F1", "Ctrl+Shift+H" })
+        new QShortcut(QKeySequence(QString::fromLatin1(key)), this, [this] { cocoHelpFor(this); });
     outer->addWidget(buttons);
 }

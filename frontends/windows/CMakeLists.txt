@@ -19,6 +19,7 @@ add_executable(fujinet-go-coco-windows WIN32
   display.c
   prefs.c
   debugger/dbg_window.c
+  help/help_window.c
   resource.rc
 )
 target_link_libraries(fujinet-go-coco-windows PRIVATE

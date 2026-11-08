@@ -48,6 +48,7 @@
 
 #include "cocodebug.h"
 #include "cocovideo.h"
+#include "../help/help_window.h"
 
 #define DISASM_LINES 40
 #define MEM_ROWS 16
@@ -68,7 +69,7 @@ static const char *const k_tab_labels[TAB_COUNT] = { "CPU", "FujiNet" };
 
 enum {
     IDC_RUN = 1000, IDC_STEP, IDC_STEP_OVER, IDC_STEP_OUT, IDC_CLEAR_BP,
-    IDC_LOAD_SYM, IDC_CLEAR_SYM, IDC_STATUS,
+    IDC_LOAD_SYM, IDC_CLEAR_SYM, IDC_HELP_BTN, IDC_STATUS,
     IDC_STEP_LINE, IDC_STEP_OVER_LINE, IDC_LOAD_SRC, IDC_CLEAR_SRC,
     IDC_SRC_COMBO, IDC_SRC_VIEW, IDC_LOCALS,
     IDC_DISASM, IDC_REGS, IDC_VIDEO,
@@ -86,7 +87,7 @@ typedef struct {
     HWND hwnd;
     HWND run_btn, step_btn, step_over_btn, step_out_btn, clear_bp_btn;
     HWND load_sym_btn, clear_sym_btn, status;
-    HWND step_line_btn, step_over_line_btn, load_src_btn, clear_src_btn;
+    HWND step_line_btn, step_over_line_btn, load_src_btn, clear_src_btn, help_btn;
     HWND src_combo, src_view, locals;
     HWND disasm, regs, video;
     HWND mem_addr, mem_go, mem_view;
@@ -949,6 +950,7 @@ static void build_controls(debugger *d)
                             IDC_LOAD_SRC);
     d->clear_src_btn = child(d, "BUTTON", "Clear C Source", BS_PUSHBUTTON,
                              IDC_CLEAR_SRC);
+    d->help_btn = child(d, "BUTTON", "Help", BS_PUSHBUTTON, IDC_HELP_BTN);
     d->status = child(d, "STATIC", "Running", SS_LEFT, IDC_STATUS);
 
     d->disasm = mono_view(d, IDC_DISASM);
@@ -1001,6 +1003,9 @@ static void build_controls(debugger *d)
     d->state_text = mono_view(d, IDC_FUJI_STATE);
 }
 
+/* Help's contexts (cocohelp.h), one per tab */
+static const char *const k_tab_contexts[] = { "debugger/cpu", "debugger/fujinet" };
+
 static void show_page(debugger *d, int page)
 {
     HWND cpu[] = {
@@ -1017,6 +1022,9 @@ static void show_page(debugger *d, int page)
     size_t i;
 
     d->page = page;
+    /* Help, F1 and Ctrl+Shift+H open the tab's section */
+    if (page >= 0 && page < (int)(sizeof k_tab_contexts / sizeof k_tab_contexts[0]))
+        coco_help_set_context(d->hwnd, k_tab_contexts[page], 1);
     for (i = 0; i < sizeof(cpu) / sizeof(cpu[0]); i++)
         ShowWindow(cpu[i], page == TAB_CPU ? SW_SHOW : SW_HIDE);
     for (i = 0; i < sizeof(fuji) / sizeof(fuji[0]); i++)
@@ -1091,7 +1099,8 @@ static void layout(debugger *d)
     MoveWindow(d->clear_sym_btn, bx, y, 110, 26, TRUE);      bx += 116;
     MoveWindow(d->load_src_btn, bx, y, 140, 26, TRUE);       bx += 146;
     MoveWindow(d->clear_src_btn, bx, y, 120, 26, TRUE);      bx += 126;
-    MoveWindow(d->status, bx, y + 5, client.right - bx - 8, 20, TRUE);
+    MoveWindow(d->help_btn, bx, y, 70, 26, TRUE);            bx += 78;
+    MoveWindow(d->status, bx, y + 5, client.right - bx - 8 > 40 ? client.right - bx - 8 : 40, 20, TRUE);
     top_h = y + 26 + 10;
 
     /* Middle area, three columns: disassembly, C source (file picker over a
@@ -1170,6 +1179,7 @@ static LRESULT CALLBACK dbg_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_STEP:       cocodebug_step(d->dbg); return 0;
         case IDC_STEP_OVER:  cocodebug_step_over(d->dbg); return 0;
         case IDC_STEP_OUT:   cocodebug_step_out(d->dbg); return 0;
+        case IDC_HELP_BTN:   coco_help_for(d->hwnd); return 0;
         case IDC_STEP_LINE:      cocodebug_step_line(d->dbg); return 0;
         case IDC_STEP_OVER_LINE: cocodebug_step_over_line(d->dbg); return 0;
         case IDC_CLEAR_BP:

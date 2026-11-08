@@ -26,6 +26,7 @@
 
 #include "cocodebug.h"
 #include "cocovideo.h"
+#include "../help/help_window.h"
 
 /* How much disassembly to show. The list is rebuilt on every stop, so this is
  * a screenful and a bit rather than a scrollback. */
@@ -630,11 +631,17 @@ static void on_window_state(GObject *obj, GParamSpec *pspec, gpointer user_data)
     update_tick(user_data);
 }
 
+/* Help's contexts (cocohelp.h), one per tab */
+static const char *const k_tab_contexts[] = { "debugger/cpu", "debugger/fujinet" };
+
 static void on_switch_page(GtkNotebook *nb, GtkWidget *page, guint num,
                            gpointer user_data)
 {
+    DebuggerUI *hui = user_data;
     (void)nb;
     (void)page;
+    if (num < G_N_ELEMENTS(k_tab_contexts))
+        coco_help_set_context(hui->window, k_tab_contexts[num]);
     if (num == TAB_FUJINET)
         refresh_fujinet(user_data, FALSE);
 }
@@ -882,6 +889,9 @@ static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code,
 
     kick(ui);
     switch (keyval) {
+    case GDK_KEY_F1:
+        coco_help_for(ui->window);
+        return TRUE;
     case GDK_KEY_F5:
         on_run_pause(NULL, ui);
         return TRUE;
@@ -1075,6 +1085,7 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     ui->status = GTK_LABEL(gtk_label_new("Running"));
     adw_header_bar_set_title_widget(ADW_HEADER_BAR(header),
                                     GTK_WIDGET(ui->status));
+    adw_header_bar_pack_end(ADW_HEADER_BAR(header), coco_help_button(NULL));
 
     bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_margin_top(bar, 6);
@@ -1246,6 +1257,10 @@ void coco_debugger_show(GtkWindow *parent, cocosession *session)
     if (tab >= 0)
         gtk_notebook_set_current_page(ui->tabs, tab);
     g_signal_connect(ui->tabs, "switch-page", G_CALLBACK(on_switch_page), ui);
+    {
+        int cur = gtk_notebook_get_current_page(ui->tabs);
+        coco_help_set_context(ui->window, k_tab_contexts[cur > 0 && cur < 2 ? cur : 0]);
+    }
 
     box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_box_append(GTK_BOX(box), header);
