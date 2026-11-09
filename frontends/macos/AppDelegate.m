@@ -25,11 +25,17 @@
 #import <WebKit/WebKit.h>
 
 #import "DisplayView.h"
+#import "controllers/ControllersWindow.h"
 #import "help/HelpWindow.h"
 #import "debugger/DebuggerWindow.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+/* How long a gamepad connect/disconnect message stays over the picture. */
+#define TOAST_SECONDS 4.0
+/* The most pads the Input page lists. */
+#define SETTINGS_PAD_ROWS 8
 
 static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
 {
@@ -42,7 +48,7 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     return types;
 }
 
-@interface AppDelegate () <NSWindowDelegate, WKUIDelegate>
+@interface AppDelegate () <NSWindowDelegate, NSTabViewDelegate, WKUIDelegate>
 @end
 
 @implementation AppDelegate {
@@ -59,6 +65,18 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     NSView *_noRoms;
     NSMutableArray<NSTextField *> *_romStatus;
     NSString *_logShown;
+
+    CocoControllersWindow *_controllers;
+    NSTimer *_sysactTimer;
+    NSTextField *_toast;                  /* the transient message over the picture */
+    unsigned _toastGeneration;
+    NSUInteger _toastSerial;
+    BOOL _launched;
+
+    NSStackView *_padBox;                 /* the Input page's pad rows */
+    NSMutableArray<NSTextField *> *_padPorts;
+    NSTimer *_padTimer;
+    unsigned _padGeneration;
 }
 
 - (instancetype)initWithSession:(cocosession *)session
@@ -78,6 +96,9 @@ static NSArray<UTType *> *typesForExtensions(NSArray<NSString *> *exts)
     cocosession_default_opts(_session, &opts);
     if (cocosession_start(_session, &opts) != 0)
         NSLog(@"session restart: %s", cocosession_last_error(_session));
+    /* the controls start centred and released; pads that come back are no news */
+    _toastGeneration = cocosession_gamepad_generation(_session);
+    [_controllers refresh];
     [self showPage];
 }
 
@@ -228,6 +249,11 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     else
         value = ((NSButton *)control).state == NSControlStateValueOn ? 1 : 0;
 
+    if ([key isEqualToString:@"analog_joystick"]) {
+        /* live, and remembered by the core */
+        cocosession_set_analog(_session, value);
+        return;
+    }
     cocosession_set_int(_session, key.UTF8String, value);
     if ([key isEqualToString:@"fujinet_external"])
         _externalField.enabled = value != 0;
@@ -258,14 +284,46 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     _sessionDirty = YES;
 }
 
-- (void)showSettings:(id)sender
+/* One Settings page: the rows in a grid, an optional note under them, and the
+ * page's Help button. */
+- (NSView *)settingsPage:(NSArray<NSArray<NSView *> *> *)rows
+                    note:(NSString *)note
+                 context:(NSString *)context
 {
-    (void)sender;
-    if (_settingsWindow) {
-        [_settingsWindow makeKeyAndOrderFront:nil];
-        return;
-    }
+    NSGridView *grid = [NSGridView gridViewWithViews:rows];
+    grid.rowSpacing = 8;
+    grid.columnSpacing = 12;
+    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
 
+    NSMutableArray<NSView *> *views = [NSMutableArray arrayWithObject:grid];
+    if (note.length) {
+        NSTextField *label = [NSTextField labelWithString:note];
+        label.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+        label.textColor = NSColor.secondaryLabelColor;
+        [views addObject:label];
+    }
+    NSStackView *stack = [NSStackView stackViewWithViews:views];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 12;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *holder = [[NSView alloc] init];
+    [holder addSubview:stack];
+    [stack.leadingAnchor constraintEqualToAnchor:holder.leadingAnchor constant:16].active = YES;
+    [stack.topAnchor constraintEqualToAnchor:holder.topAnchor constant:16].active = YES;
+
+    NSButton *helpBtn = CocoHelpButton(context);
+    helpBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    [holder addSubview:helpBtn];
+    [helpBtn.leadingAnchor constraintEqualToAnchor:holder.leadingAnchor constant:16].active = YES;
+    [helpBtn.bottomAnchor constraintEqualToAnchor:holder.bottomAnchor constant:-12].active = YES;
+    return holder;
+}
+
+/* The General page: the picture and the FujiNet. */
+- (NSView *)generalPage
+{
     _externalField = [NSTextField textFieldWithString:@(
         cocosession_get_str(_session, "fujinet_external_addr", ""))];
     _externalField.placeholderString = @"127.0.0.1:65504";
@@ -307,17 +365,60 @@ static NSArray<NSString *> *sessionSettingKeys(void)
             [NSTextField labelWithString:@"Sound"],
             [self checkBoxForKey:"enable_audio" fallback:1]
         ],
+    ];
+    return [self settingsPage:rows
+                         note:@"Display options apply immediately. FujiNet options "
+                              @"take effect when this window is closed.\nAn external "
+                              @"FujiNet is reached at the address above."
+                      context:@"prefs/Machine"];
+}
+
+/* The Input page: gamepads on or off, the stick, the port of each pad, and the
+ * way to the Controllers window, where the keys and buttons are mapped. */
+- (NSView *)inputPage
+{
+    NSButton *resetBtn = [NSButton buttonWithTitle:@"Reset Controls"
+                                            target:self
+                                            action:@selector(resetControls:)];
+    NSButton *openBtn = [NSButton buttonWithTitle:@"Open Controllers"
+                                           target:self
+                                           action:@selector(openControllers:)];
+    NSStackView *buttons = [NSStackView stackViewWithViews:@[ resetBtn, openBtn ]];
+    buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    buttons.spacing = 8;
+
+    _padBox = [NSStackView stackViewWithViews:@[]];
+    _padBox.orientation = NSUserInterfaceLayoutOrientationVertical;
+    _padBox.alignment = NSLayoutAttributeLeading;
+    _padBox.spacing = 6;
+    [self rebuildPadRows];
+
+    NSArray<NSArray<NSView *> *> *rows = @[
+        @[ [self sectionLabel:@"Input"], [NSTextField labelWithString:@""] ],
         @[
             [NSTextField labelWithString:@"Gamepads"],
             [self checkBoxForKey:"enable_gamepad" fallback:1]
         ],
+        @[
+            [NSTextField labelWithString:@"Analog joystick"],
+            [self checkBoxForKey:"analog_joystick" fallback:1]
+        ],
+        @[ [NSTextField labelWithString:@"Pads"], _padBox ],
+        @[ [NSTextField labelWithString:@"Controls"], buttons ],
     ];
+    return [self settingsPage:rows
+                         note:@"Analog joystick: a pad's left stick moves the joystick "
+                              @"in proportion; off, it is an eight-way switch.\nKeys and "
+                              @"gamepad buttons are mapped in the Controllers window "
+                              @"(View \u25B8 Controllers, Cmd+Shift+K). Gamepads on or off "
+                              @"takes effect when this window is closed."
+                      context:@"prefs/Input"];
+}
 
-    /* ROMs: one row per item under its group, refreshed after an import. */
-    NSMutableArray<NSArray<NSView *> *> *all = [rows mutableCopy];
-    [all addObject:@[
-        [self sectionLabel:@"ROMs"], [NSTextField labelWithString:@""]
-    ]];
+/* The ROMs page: one row per item under its group, refreshed after an import. */
+- (NSView *)romsPage
+{
+    NSMutableArray<NSArray<NSView *> *> *all = [NSMutableArray array];
     _romStatus = [NSMutableArray array];
     const char *group = "";
     for (int i = 0; i < cocosession_rom_item_count(); i++) {
@@ -349,29 +450,47 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     impRow.spacing = 8;
     [all addObject:@[ [NSTextField labelWithString:@""], impRow ]];
     [self refreshRomRows];
+    return [self settingsPage:all note:nil context:@"prefs/ROMs"];
+}
 
-    NSGridView *grid = [NSGridView gridViewWithViews:all];
-    grid.rowSpacing = 8;
-    grid.columnSpacing = 12;
-    [grid columnAtIndex:0].xPlacement = NSGridCellPlacementTrailing;
+static NSString *const kSettingsContexts[] = {
+    @"prefs/Machine", @"prefs/Input", @"prefs/ROMs"
+};
 
-    NSTextField *note = [NSTextField
-        labelWithString:@"Display options apply immediately. FujiNet options "
-                        @"take effect when this window is closed.\nAn external "
-                        @"FujiNet is reached at the address above."];
-    note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
-    note.textColor = NSColor.secondaryLabelColor;
+- (void)showSettings:(id)sender
+{
+    (void)sender;
+    if (_settingsWindow) {
+        [self rebuildPadRows];
+        [self startPadTimer];
+        [_settingsWindow makeKeyAndOrderFront:nil];
+        return;
+    }
 
-    NSStackView *root = [NSStackView stackViewWithViews:@[ grid, note ]];
-    root.orientation = NSUserInterfaceLayoutOrientationVertical;
-    root.alignment = NSLayoutAttributeLeading;
-    root.spacing = 12;
-    root.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
-
-    [root layoutSubtreeIfNeeded];
-    NSSize fit = root.fittingSize;
+    NSArray<NSArray *> *pages = @[
+        @[ @"General", [self generalPage] ],
+        @[ @"Input", [self inputPage] ],
+        @[ @"ROMs", [self romsPage] ],
+    ];
+    CGFloat wide = 0, high = 0;
+    NSTabView *tabs = [[NSTabView alloc] init];
+    for (NSArray *page in pages) {
+        NSView *holder = page[1];
+        [holder layoutSubtreeIfNeeded];
+        const NSSize fit = ((NSView *)holder.subviews.firstObject).fittingSize;
+        wide = MAX(wide, fit.width);
+        high = MAX(high, fit.height);
+        NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:page[0]];
+        item.label = page[0];
+        item.view = holder;
+        [tabs addTabViewItem:item];
+    }
+    /* room for the tabs themselves, the margins and the Help button */
+    const NSSize size = NSMakeSize(MAX(wide + 56, 440), high + 100);
+    tabs.frame = NSMakeRect(0, 0, size.width, size.height);
+    tabs.delegate = self;
     _settingsWindow = [[NSWindow alloc]
-        initWithContentRect:NSMakeRect(0, 0, MAX(fit.width, 420), fit.height)
+        initWithContentRect:NSMakeRect(0, 0, size.width, size.height)
                   styleMask:NSWindowStyleMaskTitled |
                             NSWindowStyleMaskClosable |
                             NSWindowStyleMaskMiniaturizable
@@ -380,18 +499,120 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     _settingsWindow.title = @"Settings";
     _settingsWindow.releasedWhenClosed = NO;
     _settingsWindow.delegate = self;
-    {
-        /* the settings over a strip with the Help button */
-        NSButton *helpBtn = CocoHelpButton(@"prefs/Machine");
-        NSStackView *wrap = [NSStackView stackViewWithViews:@[root, helpBtn]];
-        wrap.orientation = NSUserInterfaceLayoutOrientationVertical;
-        wrap.alignment = NSLayoutAttributeLeading;
-        wrap.edgeInsets = NSEdgeInsetsMake(0, 16, 12, 16);
-        _settingsWindow.contentView = wrap;
-        CocoSetHelpContext(_settingsWindow, @"prefs/Machine");
-    }
+    _settingsWindow.contentView = tabs;
+    CocoSetHelpContext(_settingsWindow, kSettingsContexts[0]);
     [_settingsWindow center];
+    [self startPadTimer];
     [_settingsWindow makeKeyAndOrderFront:nil];
+}
+
+/* Command+? and the Help button follow the page showing. */
+- (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)item
+{
+    const NSInteger idx = [tabView indexOfTabViewItem:item];
+    if (idx >= 0 && idx < 3)
+        CocoSetHelpContext(_settingsWindow, kSettingsContexts[idx]);
+}
+
+/* ---- gamepads on the Input page ---------------------------------------------- */
+
+- (void)refreshPadPorts
+{
+    for (NSUInteger row = 0; row < _padPorts.count; row++) {
+        const int port = cocosession_gamepad_effective_port(_session, (int)row);
+        NSString *text = port == 0 ? @"drives the right joystick"
+                       : (port == 1 ? @"drives the left joystick" : @"drives nothing");
+        if (![_padPorts[row].stringValue isEqualToString:text])
+            _padPorts[row].stringValue = text;
+    }
+}
+
+/* One row per connected pad: its name, the joystick it is set to
+ * (Automatic, Right, Left) and the one it drives now. Rebuilt when the
+ * generation changes (a pad came or went). */
+- (void)rebuildPadRows
+{
+    for (NSView *row in [_padBox.arrangedSubviews copy]) {
+        [_padBox removeArrangedSubview:row];
+        [row removeFromSuperview];
+    }
+    _padPorts = [NSMutableArray array];
+    _padGeneration = cocosession_gamepad_generation(_session);
+    const int count = MIN(cocosession_gamepad_count(_session), SETTINGS_PAD_ROWS);
+    if (count <= 0) {
+        NSTextField *none = [NSTextField labelWithString:@"No gamepads connected"];
+        none.textColor = NSColor.secondaryLabelColor;
+        [_padBox addArrangedSubview:none];
+        return;
+    }
+    for (int idx = 0; idx < count; idx++) {
+        char name[128];
+        name[0] = '\0';
+        cocosession_gamepad_name(_session, idx, name, (int)sizeof name);
+        NSTextField *label = [NSTextField labelWithString:[NSString stringWithUTF8String:name]
+                                                      ?: @""];
+        label.lineBreakMode = NSLineBreakByTruncatingTail;
+        label.toolTip = label.stringValue;
+        [label.widthAnchor constraintEqualToConstant:200].active = YES;
+
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        [popup addItemsWithTitles:@[ @"Automatic", @"Right joystick", @"Left joystick" ]];
+        const int assign = cocosession_gamepad_assignment(_session, idx);
+        [popup selectItemAtIndex:(assign < 0 || assign > 1 ? 0 : assign + 1)];
+        popup.tag = idx;
+        popup.target = self;
+        popup.action = @selector(padAssignChanged:);
+
+        NSTextField *eff = [NSTextField labelWithString:@""];
+        eff.textColor = NSColor.secondaryLabelColor;
+        [_padPorts addObject:eff];
+
+        NSStackView *row = [NSStackView stackViewWithViews:@[ label, popup, eff ]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.spacing = 8;
+        [_padBox addArrangedSubview:row];
+    }
+    [self refreshPadPorts];
+}
+
+- (void)padAssignChanged:(NSPopUpButton *)sender
+{
+    const int sel = (int)sender.indexOfSelectedItem;
+    cocosession_gamepad_assign(_session, (int)sender.tag, sel <= 0 ? -1 : sel - 1);
+    [self refreshPadPorts];
+}
+
+/* Hot-plugged pads show up in the list while the window is open. */
+- (void)startPadTimer
+{
+    if (_padTimer) return;
+    __weak AppDelegate *weakSelf = self;
+    _padTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
+                                                repeats:YES
+                                                  block:^(NSTimer *timer) {
+        (void)timer;
+        AppDelegate *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (cocosession_gamepad_generation(strongSelf->_session) != strongSelf->_padGeneration)
+            [strongSelf rebuildPadRows];
+        else
+            [strongSelf refreshPadPorts];
+    }];
+    _padTimer.tolerance = 0.25;
+}
+
+- (void)resetControls:(id)sender
+{
+    (void)sender;
+    cocosession_bindings_reset(_session);
+    [_controllers refresh];
+}
+
+- (void)openControllers:(id)sender
+{
+    (void)sender;
+    if (![_controllers isVisible])
+        [_controllers toggle];
 }
 
 - (void)refreshRomRows
@@ -406,8 +627,11 @@ static NSArray<NSString *> *sessionSettingKeys(void)
  * restart when it closes. */
 - (void)windowWillClose:(NSNotification *)note
 {
-    if (note.object == _settingsWindow)
+    if (note.object == _settingsWindow) {
         [_settingsWindow makeFirstResponder:nil]; /* commit a field edit */
+        [_padTimer invalidate];
+        _padTimer = nil;
+    }
     if (note.object != _settingsWindow || !_sessionDirty)
         return;
     _sessionDirty = NO;
@@ -640,6 +864,94 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     [DebuggerWindow showForSession:_session];
 }
 
+- (void)toggleControllers:(id)sender
+{
+    (void)sender;
+    [_controllers toggle];
+}
+
+/* ---- the sysaction timer and the toast ---------------------------------------
+ * The gamepad thread and a key bound to a system action cannot touch AppKit:
+ * they post the action, and this timer (50 ms, while the machine's window can
+ * be seen) takes it. The same tick shows a gamepad coming or going. */
+
+- (void)runSysaction:(int)sact
+{
+    if (sact == COCO_SYSACT_DEBUG_STOP) {
+        /* engages and pauses; the debugger window then opens on it */
+        cocosession_sysaction(_session, sact);
+        [DebuggerWindow showForSession:_session];
+    }
+}
+
+- (void)sysactTick
+{
+    int sact;
+    while (cocosession_sysaction_take(_session, &sact))
+        [self runSysaction:sact];
+    const unsigned gen = cocosession_gamepad_generation(_session);
+    if (gen != _toastGeneration) {
+        _toastGeneration = gen;
+        char msg[160];
+        if (cocosession_gamepad_last_event(_session, msg, sizeof msg) > 0)
+            [self showToast:[NSString stringWithUTF8String:msg]];
+    }
+}
+
+- (BOOL)windowCanBeSeen:(NSWindow *)win
+{
+    return win && [win isVisible] && ![win isMiniaturized] &&
+           ([win occlusionState] & NSWindowOcclusionStateVisible) && ![NSApp isHidden];
+}
+
+/* The timer runs while the machine's window can be seen; it catches up once
+ * when it starts again. */
+- (void)updateTimers
+{
+    const BOOL want = _launched && [self windowCanBeSeen:_window];
+    if (want && !_sysactTimer) {
+        __weak AppDelegate *weakSelf = self;
+        _sysactTimer = [NSTimer scheduledTimerWithTimeInterval:0.05
+                                                       repeats:YES
+                                                         block:^(NSTimer *timer) {
+            (void)timer;
+            [weakSelf sysactTick];
+        }];
+        _sysactTimer.tolerance = 0.025;
+        [self sysactTick];
+    } else if (!want && _sysactTimer) {
+        [_sysactTimer invalidate];
+        _sysactTimer = nil;
+    }
+}
+
+- (void)visibilityChanged:(NSNotification *)note
+{
+    (void)note;
+    [self updateTimers];
+}
+
+- (void)showToast:(NSString *)text
+{
+    if (!text) return;
+    _toast.stringValue = text;
+    _toast.hidden = NO;
+    const NSUInteger serial = ++_toastSerial;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(TOAST_SECONDS * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        /* a newer message restarts the clock */
+        if (serial == self->_toastSerial) self->_toast.hidden = YES;
+    });
+}
+
+/* Losing key status with keys held would leave the machine believing they
+ * are still down (a pad's holds and the Controllers panel's are not touched). */
+- (void)windowDidResignKey:(NSNotification *)note
+{
+    if (note.object == _window)
+        cocosession_release_all(_session);
+}
+
 /* ---- live machine / video / CPU radio menus --------------------------------
  * Built at runtime by walking the session's own cocosession_*_name(idx)
  * tables until NULL -- no fixed menu resource, so a new entry added to
@@ -674,6 +986,7 @@ static NSArray<NSString *> *sessionSettingKeys(void)
 - (void)selectMachine:(NSMenuItem *)sender
 {
     cocosession_set_machine(_session, (int)sender.tag);
+    [_controllers refresh];
     [self startMachine];
     [self rebuildMenus];
 }
@@ -858,6 +1171,14 @@ static NSArray<NSString *> *sessionSettingKeys(void)
                                            (unichar)NSF12FunctionKey]];
     dbg.keyEquivalentModifierMask = 0;
     [view addItem:dbg];
+    /* Cmd+Shift+K: every plain key, F9 and Ctrl+Shift+letter among them, is
+     * the CoCo's */
+    NSMenuItem *ctl = [self item:@"Controllers"
+                          action:@selector(toggleControllers:)
+                             key:@"k"];
+    ctl.keyEquivalentModifierMask =
+        NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    [view addItem:ctl];
     viewItem.submenu = view;
     [menubar addItem:viewItem];
 
@@ -928,6 +1249,7 @@ static NSArray<NSString *> *sessionSettingKeys(void)
                     backing:NSBackingStoreBuffered
                       defer:NO];
     _window.title = @"FujiNet Go CoCo";
+    _window.delegate = self;
 
     _display = [[DisplayView alloc] initWithSession:_session];
     _display.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -935,7 +1257,23 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     [_window.contentView addSubview:_display];
     _noRoms = [self buildNoRoms:((NSView *)_window.contentView).bounds];
     [_window.contentView addSubview:_noRoms];
+
+    /* The toast: a label over the top of the picture. */
+    NSView *content = _window.contentView;
+    _toast = [NSTextField labelWithString:@""];
+    _toast.font = [NSFont boldSystemFontOfSize:13];
+    _toast.textColor = NSColor.whiteColor;
+    _toast.drawsBackground = YES;
+    _toast.backgroundColor = [NSColor colorWithWhite:0.0 alpha:0.7];
+    _toast.alignment = NSTextAlignmentCenter;
+    _toast.hidden = YES;
+    _toast.frame = NSMakeRect(0, content.bounds.size.height - 34, content.bounds.size.width, 26);
+    _toast.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    [content addSubview:_toast];
+    _toastGeneration = cocosession_gamepad_generation(_session);
     [self applyDisplaySettings];
+
+    _controllers = [[CocoControllersWindow alloc] initWithSession:_session];
 
     [_window center];
     [_window makeKeyAndOrderFront:nil];
@@ -944,14 +1282,32 @@ static NSArray<NSString *> *sessionSettingKeys(void)
     [self showPage];
 
     /* Developer affordance shared with the other frontends. */
+    if (getenv("COCO_OPEN_CONTROLLERS"))
+        [_controllers toggle];
     if (getenv("COCO_OPEN_DEBUGGER"))
         [DebuggerWindow showForSession:_session];
+
+    /* the sysaction timer follows the window's visibility */
+    _launched = YES;
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    for (NSString *name in @[ NSWindowDidChangeOcclusionStateNotification,
+                              NSWindowDidMiniaturizeNotification,
+                              NSWindowDidDeminiaturizeNotification,
+                              NSApplicationDidHideNotification,
+                              NSApplicationDidUnhideNotification ])
+        [center addObserver:self
+                   selector:@selector(visibilityChanged:)
+                       name:name
+                     object:nil];
+    [self updateTimers];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)note
 {
     (void)note;
     [_logTimer invalidate];
+    [_sysactTimer invalidate];
+    [_padTimer invalidate];
     [_display stop];
     cocosession_stop(_session);
 }
