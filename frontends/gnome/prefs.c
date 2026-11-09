@@ -6,8 +6,9 @@
  * artifact renderer all switch in place on the emulator thread, so unlike the
  * Apple II target -- whose slot cards are libretro core options read once at
  * load time -- no option in this dialog needs the session restarted. The only
- * exception is the FujiNet/audio/gamepad group, which decides what the session
- * starts, and which the dialog therefore applies on close.
+ * exception is the FujiNet/audio group and the Input page's Gamepads switch,
+ * which decide what the session starts, and which the dialog therefore applies
+ * on close.
  *
  * Everything is stored as an INDEX into the session's own label tables, which
  * is safe because those enums are the session's (core/include/cocosession.h),
@@ -21,10 +22,12 @@
 
 #include <string.h>
 
+#include "controllers/controllers_window.h"
 #include "window.h"
 #include "help/help_window.h"
 
 #define MAX_ROM_ROWS 8
+#define MAX_PAD_ROWS 8
 
 static const char *const aspect_names[] = {"TV (4:3)", "Square pixels",
                                            "Integer scale", NULL};
@@ -35,6 +38,11 @@ typedef struct {
     void (*display_changed)(CocoWindow *window);
     gboolean session_dirty; /* a start-time option changed */
     GtkWidget *rom_rows[MAX_ROM_ROWS];
+    AdwPreferencesGroup *pad_group;   /* the Input page's list of pads */
+    GtkWidget *pad_rows[MAX_PAD_ROWS];
+    int pad_row_count;
+    unsigned pad_generation;
+    guint pad_timer;
 } PrefsState;
 
 typedef struct {
@@ -141,6 +149,188 @@ static GtkWidget *switch_row(PrefsState *state, const char *title,
     g_signal_connect_data(row, "notify::active", G_CALLBACK(switch_changed), b,
                           (GClosureNotify)g_free, 0);
     return row;
+}
+
+/* ---- the Input page ------------------------------------------------------ */
+
+static void analog_changed(GObject *row, GParamSpec *pspec, gpointer user_data)
+{
+    PrefsState *state = user_data;
+    (void)pspec;
+    cocosession_set_analog(state->session,
+                           adw_switch_row_get_active(ADW_SWITCH_ROW(row)) ? 1 : 0);
+}
+
+static void pad_subtitle(PrefsState *state, int idx, GtkWidget *row)
+{
+    const int effective = cocosession_gamepad_effective_port(state->session, idx);
+    const char *text = effective == 0 ? "Driving the right joystick"
+                     : effective > 0 ? "Driving the left joystick"
+                     : "Driving nothing";
+    if (g_strcmp0(adw_action_row_get_subtitle(ADW_ACTION_ROW(row)), text) != 0)
+        adw_action_row_set_subtitle(ADW_ACTION_ROW(row), text);
+}
+
+static void pad_assign_changed(GObject *row, GParamSpec *pspec, gpointer user_data)
+{
+    PrefsState *state = g_object_get_data(row, "coco-state");
+    const int idx = GPOINTER_TO_INT(user_data);
+    const int sel = (int)adw_combo_row_get_selected(ADW_COMBO_ROW(row));
+    (void)pspec;
+    /* 0 = automatic (connection order), 1 = the right joystick, 2 = the left */
+    cocosession_gamepad_assign(state->session, idx, sel - 1);
+    pad_subtitle(state, idx, GTK_WIDGET(row));
+}
+
+/* One row per connected pad, rebuilt when the set changes. */
+static void rebuild_pad_rows(PrefsState *state)
+{
+    static const char *const choices[] = { "Automatic", "Right joystick",
+                                           "Left joystick", NULL };
+    const int count = cocosession_gamepad_count(state->session);
+    int idx;
+
+    for (idx = 0; idx < state->pad_row_count; idx++)
+        adw_preferences_group_remove(state->pad_group, state->pad_rows[idx]);
+    state->pad_row_count = 0;
+
+    if (count == 0) {
+        GtkWidget *none = adw_action_row_new();
+        adw_preferences_row_set_title(ADW_PREFERENCES_ROW(none),
+                                      "No gamepads connected");
+        adw_action_row_set_subtitle(ADW_ACTION_ROW(none),
+                                    "Plug one in: it is picked up as it appears");
+        adw_preferences_group_add(state->pad_group, none);
+        state->pad_rows[state->pad_row_count++] = none;
+        return;
+    }
+    for (idx = 0; idx < count && idx < MAX_PAD_ROWS; idx++) {
+        GtkWidget *row = adw_combo_row_new();
+        GtkStringList *model = gtk_string_list_new(choices);
+        const int assign = cocosession_gamepad_assignment(state->session, idx);
+        char name[128];
+
+        cocosession_gamepad_name(state->session, idx, name, sizeof name);
+        adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
+        adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), name);
+        adw_combo_row_set_model(ADW_COMBO_ROW(row), G_LIST_MODEL(model));
+        adw_combo_row_set_selected(ADW_COMBO_ROW(row),
+                                   assign < 0 || assign > 1 ? 0 : (guint)assign + 1);
+        g_object_set_data(G_OBJECT(row), "coco-state", state);
+        g_signal_connect(row, "notify::selected", G_CALLBACK(pad_assign_changed),
+                         GINT_TO_POINTER(idx));
+        g_object_unref(model);
+        adw_preferences_group_add(state->pad_group, row);
+        state->pad_rows[state->pad_row_count++] = row;
+        pad_subtitle(state, idx, row);
+    }
+}
+
+/* Hot-plugged pads, and a pad's automatic assignment changing. */
+static gboolean pad_tick(gpointer user_data)
+{
+    PrefsState *state = user_data;
+    const unsigned gen = cocosession_gamepad_generation(state->session);
+
+    if (gen != state->pad_generation) {
+        state->pad_generation = gen;
+        rebuild_pad_rows(state);
+    } else if (cocosession_gamepad_count(state->session) > 0) {
+        int idx;
+        for (idx = 0; idx < state->pad_row_count; idx++)
+            pad_subtitle(state, idx, state->pad_rows[idx]);
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static void reset_controls_clicked(GtkButton *button, gpointer user_data)
+{
+    PrefsState *state = user_data;
+    (void)button;
+    cocosession_bindings_reset(state->session);
+    coco_window_toast(state->window, "Controls back to their defaults");
+}
+
+static void open_controllers_clicked(GtkButton *button, gpointer user_data)
+{
+    PrefsState *state = user_data;
+    (void)button;
+    coco_controllers_show(GTK_WINDOW(state->window), state->session);
+}
+
+static GtkWidget *button_row(const char *title, const char *subtitle,
+                             const char *label, GCallback handler,
+                             PrefsState *state)
+{
+    GtkWidget *row = adw_action_row_new();
+    GtkWidget *button = gtk_button_new_with_label(label);
+
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+    adw_action_row_set_subtitle(ADW_ACTION_ROW(row), subtitle);
+    gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+    g_signal_connect(button, "clicked", handler, state);
+    adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
+    return row;
+}
+
+static AdwPreferencesPage *build_input_page(PrefsState *state)
+{
+    AdwPreferencesPage *page = ADW_PREFERENCES_PAGE(adw_preferences_page_new());
+    AdwPreferencesGroup *pads = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
+    AdwPreferencesGroup *list = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
+    AdwPreferencesGroup *controls = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
+    GtkWidget *analog;
+
+    adw_preferences_page_set_title(page, "Input");
+    adw_preferences_page_set_name(page, "Input");
+    adw_preferences_page_set_icon_name(page, "input-gaming-symbolic");
+
+    adw_preferences_group_set_title(pads, "Gamepads");
+    adw_preferences_group_set_header_suffix(pads, coco_help_button("prefs/Input"));
+    adw_preferences_group_set_description(
+        pads, "Gamepads drive the two analog joystick ports. The first one "
+              "drives the right joystick, the second the left; the choice "
+              "below is remembered.");
+    adw_preferences_group_add(
+        pads, switch_row(state, "Gamepads",
+                         "Drive the analog joystick ports from connected "
+                         "gamepads (applied when this dialog closes)",
+                         "enable_gamepad", 1, APPLY_ON_CLOSE));
+    analog = adw_switch_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(analog), "Analog joystick");
+    adw_action_row_set_subtitle(
+        ADW_ACTION_ROW(analog),
+        "Move the joystick in proportion to the pad's left stick. Off, the "
+        "stick acts as a D-pad: full deflection or none.");
+    adw_switch_row_set_active(ADW_SWITCH_ROW(analog),
+                              cocosession_get_int(state->session, "analog_joystick", 1));
+    g_signal_connect(analog, "notify::active", G_CALLBACK(analog_changed), state);
+    adw_preferences_group_add(pads, analog);
+
+    adw_preferences_group_set_title(list, "Connected pads");
+    state->pad_group = list;
+    state->pad_generation = cocosession_gamepad_generation(state->session);
+    rebuild_pad_rows(state);
+    state->pad_timer = g_timeout_add(250, pad_tick, state);
+
+    adw_preferences_group_set_title(controls, "Controls");
+    adw_preferences_group_add(
+        controls, button_row("Open Controllers",
+                             "Keys and buttons are mapped in the Controllers "
+                             "window (Ctrl+Shift+K)",
+                             "Open\xe2\x80\xa6",
+                             G_CALLBACK(open_controllers_clicked), state));
+    adw_preferences_group_add(
+        controls, button_row("Reset Controls",
+                             "Put every joystick key and gamepad button back "
+                             "to its default",
+                             "Reset",
+                             G_CALLBACK(reset_controls_clicked), state));
+
+    adw_preferences_page_add(page, pads);
+    adw_preferences_page_add(page, list);
+    adw_preferences_page_add(page, controls);
+    return page;
 }
 
 /* ---- the ROMs page ------------------------------------------------------- */
@@ -283,6 +473,10 @@ static void prefs_closed(GtkWidget *dialog, gpointer user_data)
 {
     PrefsState *state = user_data;
     (void)dialog;
+    if (state->pad_timer) {
+        g_source_remove(state->pad_timer);
+        state->pad_timer = 0;
+    }
     if (state->session_dirty) {
         coco_window_restart_session(state->window);
         coco_window_toast(state->window,
@@ -335,7 +529,9 @@ void coco_prefs_show(CocoWindow *parent, cocosession *session,
     state->session = session;
     state->display_changed = display_changed;
 
+    adw_preferences_page_set_title(page, "Machine");
     adw_preferences_page_set_name(page, "Machine");
+    adw_preferences_page_set_icon_name(page, "computer-symbolic");
     adw_preferences_group_set_title(machine, "Machine");
     adw_preferences_group_set_header_suffix(machine, coco_help_button("prefs/Machine"));
     adw_preferences_group_set_description(
@@ -402,17 +598,13 @@ void coco_prefs_show(CocoWindow *parent, cocosession *session,
     adw_preferences_group_add(
         runtime, switch_row(state, "Sound", NULL, "enable_audio", 1,
                             APPLY_ON_CLOSE));
-    adw_preferences_group_add(
-        runtime, switch_row(state, "Gamepads",
-                            "Drive the analog joystick ports from connected "
-                            "gamepads",
-                            "enable_gamepad", 1, APPLY_ON_CLOSE));
 
     adw_preferences_page_add(page, machine);
     adw_preferences_page_add(page, video);
     adw_preferences_page_add(page, display);
     adw_preferences_page_add(page, runtime);
     adw_preferences_dialog_add(dialog, page);
+    adw_preferences_dialog_add(dialog, build_input_page(state));
     adw_preferences_dialog_add(dialog, build_roms_page(state));
     refresh_rows(state);
     g_signal_connect(dialog, "closed", G_CALLBACK(prefs_closed), state);

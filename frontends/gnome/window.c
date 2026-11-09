@@ -1,8 +1,9 @@
 /*
  * CocoWindow: main window of the GNOME frontend. Header bar + menu over the
  * emulator display; keyboard capture routes everything except F10 (menu),
- * F11 (fullscreen) and F12 (debugger) to the CoCo. No on-screen input panels
- * are shown unless the user asks for them.
+ * F11 (fullscreen) and F12 (debugger) to the CoCo; Ctrl+Shift+K shows the
+ * Controllers window. No on-screen input panels are shown unless the user
+ * asks for them.
  *
  * Copyright (C) 2026 Thomas Cherryhomes
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -14,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "controllers/controllers_window.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
 #include "prefs.h"
@@ -27,6 +29,9 @@ struct _CocoWindow {
     GtkStack *stack;          /* the picture, or the No-BIOS page */
     AdwToastOverlay *toasts;
     GtkMenuButton *menu_button;
+    guint drain_id;           /* the 50 ms sysaction / pad-event drain */
+    unsigned pad_generation;  /* the pad set the last toast was for */
+    gboolean ctlk_down;       /* Ctrl+Shift+K went down: swallow its release */
 };
 
 G_DEFINE_FINAL_TYPE(CocoWindow, coco_window, ADW_TYPE_APPLICATION_WINDOW)
@@ -66,6 +71,8 @@ void coco_window_restart_session(CocoWindow *self)
         if (cocosession_start(self->session, &opts) != 0)
             coco_window_toast(self, cocosession_last_error(self->session));
     }
+    /* Pads re-enumerate on a restart: they are not news. */
+    self->pad_generation = cocosession_gamepad_generation(self->session);
     coco_window_show_page(self);
 }
 
@@ -101,10 +108,32 @@ static void apply_display_settings(CocoWindow *self)
 static gboolean forward_key(CocoWindow *self, guint keyval,
                             GdkModifierType state, int down)
 {
+    /* A bound key drives its joystick target and is not typed; the rest go
+     * to the machine. Either way it is ours. */
     cocosession_key(self->session, down, keyval, gdk_keyval_to_unicode(keyval),
                     (state & GDK_CONTROL_MASK) != 0,
                     (state & GDK_SHIFT_MASK) != 0);
     return TRUE;
+}
+
+void coco_window_release_keys(CocoWindow *self)
+{
+    cocosession_release_all(self->session);
+}
+
+/* A system action (the debugger stop) from the UI thread: the core engages
+ * and pauses the debugger, the window then shows it. */
+void coco_window_run_sysaction(CocoWindow *self, int sysact)
+{
+    switch (sysact) {
+    case COCO_SYSACT_DEBUG_STOP:
+        cocosession_sysaction(self->session, sysact);
+        if (cocosession_is_running(self->session))
+            coco_debugger_show(GTK_WINDOW(self), self->session);
+        break;
+    default:
+        break;
+    }
 }
 
 /* The Help context the main window shows now: "main", or "prefs/Machine"
@@ -135,13 +164,39 @@ static const GActionEntry app_actions[] = {
     { "help", action_help, NULL, NULL, NULL, { 0 } },
 };
 
-static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
-                               guint keycode, GdkModifierType state,
-                               gpointer user_data)
+/* Every key of the main window and of the Controllers window (the CoCo owns
+ * the whole keyboard, so typing there must behave the same): the window's own
+ * keys first, then the machine. */
+gboolean coco_window_key(CocoWindow *self, guint keyval,
+                         GdkModifierType state, gboolean down)
 {
-    CocoWindow *self = COCO_WINDOW(user_data);
-    (void)controller;
-    (void)keycode;
+    const gboolean toggle_key = keyval == GDK_KEY_K || keyval == GDK_KEY_k;
+
+    /* Any other key means the toggle's release was lost (the window it went
+     * to is gone): it is not auto-repeating any more. */
+    if (!toggle_key)
+        self->ctlk_down = FALSE;
+    /* Ctrl+Shift+K toggles the Controllers window. It is the app's, so it
+     * never reaches the CoCo; its release is swallowed with it. */
+    if (toggle_key && down && (state & GDK_CONTROL_MASK) &&
+        (state & GDK_SHIFT_MASK)) {
+        if (!self->ctlk_down) {
+            self->ctlk_down = TRUE;
+            coco_controllers_toggle(GTK_WINDOW(self), self->session);
+        }
+        return TRUE;
+    }
+    if (toggle_key && !down && self->ctlk_down) {
+        self->ctlk_down = FALSE;
+        return TRUE;
+    }
+
+    if (!down) {
+        if (keyval == GDK_KEY_F10 || keyval == GDK_KEY_F11 ||
+            keyval == GDK_KEY_F12)
+            return TRUE;
+        return forward_key(self, keyval, state, 0);
+    }
 
     /* F1 is an COCO function key in the window itself, and Help while
      * Preferences or another dialog is open */
@@ -171,17 +226,69 @@ static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
     return forward_key(self, keyval, state, 1);
 }
 
+static gboolean on_key_pressed(GtkEventControllerKey *controller, guint keyval,
+                               guint keycode, GdkModifierType state,
+                               gpointer user_data)
+{
+    (void)controller;
+    (void)keycode;
+    return coco_window_key(COCO_WINDOW(user_data), keyval, state, TRUE);
+}
+
 static void on_key_released(GtkEventControllerKey *controller, guint keyval,
                             guint keycode, GdkModifierType state,
                             gpointer user_data)
 {
-    CocoWindow *self = COCO_WINDOW(user_data);
     (void)controller;
     (void)keycode;
-    if (keyval == GDK_KEY_F10 || keyval == GDK_KEY_F11 ||
-        keyval == GDK_KEY_F12)
-        return;
-    forward_key(self, keyval, state, 0);
+    coco_window_key(COCO_WINDOW(user_data), keyval, state, FALSE);
+}
+
+/* Focus leaving the window with keys held would leave the machine believing
+ * they are still down. The Controllers window's own holds stay. */
+static void on_focus_leave(GtkEventControllerFocus *controller,
+                           gpointer user_data)
+{
+    (void)controller;
+    coco_window_release_keys(COCO_WINDOW(user_data));
+}
+
+static void on_active_changed(GObject *object, GParamSpec *pspec,
+                              gpointer user_data)
+{
+    (void)pspec;
+    if (!gtk_window_is_active(GTK_WINDOW(object)))
+        coco_window_release_keys(COCO_WINDOW(user_data));
+}
+
+/* The gamepad thread cannot call into GTK: it posts system actions and this
+ * timer takes them. It also says so when a pad comes or goes, so a pad that
+ * drops off Bluetooth mid-game is not a mystery. */
+static gboolean drain_tick(gpointer user_data)
+{
+    CocoWindow *self = COCO_WINDOW(user_data);
+    unsigned gen;
+    int sysact;
+
+    while (cocosession_sysaction_take(self->session, &sysact))
+        coco_window_run_sysaction(self, sysact);
+    gen = cocosession_gamepad_generation(self->session);
+    if (gen != self->pad_generation) {
+        char text[160];
+        self->pad_generation = gen;
+        if (cocosession_gamepad_last_event(self->session, text, sizeof text) > 0)
+            coco_window_toast(self, text);
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static void action_controllers(GSimpleAction *action, GVariant *param,
+                               gpointer user_data)
+{
+    CocoWindow *self = COCO_WINDOW(user_data);
+    (void)action;
+    (void)param;
+    coco_controllers_toggle(GTK_WINDOW(self), self->session);
 }
 
 /* ---- actions ------------------------------------------------------------ */
@@ -570,6 +677,7 @@ static GMenu *build_menu(cocosession *session)
     g_menu_append_submenu(view, "CPU", G_MENU_MODEL(sub));
     g_object_unref(sub);
     g_menu_append(view, "Debugger (F12)", "win.debugger");
+    g_menu_append(view, "Controllers (Ctrl+Shift+K)", "win.controllers");
     g_menu_append_section(menu, "View", G_MENU_MODEL(view));
 
     g_menu_append(media, "Import Disk or Tape Image…", "win.import-media");
@@ -609,6 +717,7 @@ static const GActionEntry win_actions[] = {
     {.name = "fujinet-config", .activate = action_fujinet_config},
     {.name = "fujinet-log", .activate = action_fujinet_log},
     {.name = "debugger", .activate = action_debugger},
+    {.name = "controllers", .activate = action_controllers},
     {.name = "preferences", .activate = action_preferences},
     {.name = "about", .activate = action_about},
 };
@@ -625,9 +734,19 @@ static void add_radio_action(CocoWindow *self, const char *name, int value,
     g_object_unref(a);
 }
 
+static void coco_window_dispose(GObject *object)
+{
+    CocoWindow *self = COCO_WINDOW(object);
+    if (self->drain_id) {
+        g_source_remove(self->drain_id);
+        self->drain_id = 0;
+    }
+    G_OBJECT_CLASS(coco_window_parent_class)->dispose(object);
+}
+
 static void coco_window_class_init(CocoWindowClass *klass)
 {
-    (void)klass;
+    G_OBJECT_CLASS(klass)->dispose = coco_window_dispose;
 }
 
 static void coco_window_init(CocoWindow *self)
@@ -645,7 +764,7 @@ GtkWidget *coco_window_new(AdwApplication *app, cocosession *session)
                                     NULL);
     AdwToolbarView *view;
     AdwHeaderBar *header;
-    GtkEventController *keys;
+    GtkEventController *keys, *focus;
 
     self->session = session;
 
@@ -692,6 +811,16 @@ GtkWidget *coco_window_new(AdwApplication *app, cocosession *session)
     g_signal_connect(keys, "key-released", G_CALLBACK(on_key_released), self);
     gtk_widget_add_controller(GTK_WIDGET(self), keys);
 
+    focus = gtk_event_controller_focus_new();
+    g_signal_connect(focus, "leave", G_CALLBACK(on_focus_leave), self);
+    gtk_widget_add_controller(GTK_WIDGET(self), focus);
+    g_signal_connect(self, "notify::is-active", G_CALLBACK(on_active_changed),
+                     self);
+
+    /* The pads plugged in at launch are the baseline: no toast for them. */
+    self->pad_generation = cocosession_gamepad_generation(session);
+    self->drain_id = g_timeout_add(50, drain_tick, self);
+
     apply_display_settings(self);
     coco_window_show_page(self);
     gtk_widget_grab_focus(GTK_WIDGET(self->display));
@@ -700,6 +829,8 @@ GtkWidget *coco_window_new(AdwApplication *app, cocosession *session)
      * which is what you want when the app dies before you can reach a menu. */
     if (getenv("COCO_OPEN_DEBUGGER"))
         coco_debugger_show(GTK_WINDOW(self), session);
+    if (getenv("COCO_OPEN_CONTROLLERS"))
+        coco_controllers_show(GTK_WINDOW(self), session);
     if (getenv("COCO_OPEN_SETTINGS"))
         coco_prefs_show(self, session, apply_display_settings);
     return GTK_WIDGET(self);

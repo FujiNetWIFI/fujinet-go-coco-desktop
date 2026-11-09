@@ -22,6 +22,16 @@ void coco_window_toast(CocoWindow *self, const char *message);
  * while Preferences are open. */
 const char *coco_window_help_context(CocoWindow *self);
 void coco_window_restart_session(CocoWindow *self);
+/* One key press or release as the main window handles it: its own keys
+ * (F10 menu, F11 fullscreen, F12 debugger, Ctrl+Shift+K Controllers), then a
+ * bound joystick key, then the machine. The Controllers window calls it for
+ * every key it does not map. Returns TRUE: the key is dealt with. */
+gboolean coco_window_key(CocoWindow *self, guint keyval, GdkModifierType state,
+                         gboolean down);
+/* Lets go of the keys the host keyboard holds (focus loss). */
+void coco_window_release_keys(CocoWindow *self);
+/* Runs a COCO_SYSACT_* on the UI thread and shows what it opens. */
+void coco_window_run_sysaction(CocoWindow *self, int sysact);
 /* The picture, or the No-BIOS page when the machine has no ROMs to boot. */
 void coco_window_show_page(CocoWindow *self);
 /* Starts the machine if it isn't running and its ROMs are there. */
