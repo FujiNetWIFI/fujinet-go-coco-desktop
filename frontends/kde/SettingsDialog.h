@@ -24,6 +24,10 @@ public:
      * target they all switch in place, from the Machine and View menus. */
     bool sessionDirty() const { return m_sessionDirty; }
 
+    /* True when "Open Controllers" closed the dialog: the caller shows the
+     * Controllers window, which a modal dialog would otherwise block. */
+    bool wantsControllers() const { return m_wantControllers; }
+
     /* Saves the external FujiNet fields first; an address that is not
      * host:port keeps the dialog open. */
     void done(int result) override;
@@ -44,5 +48,6 @@ private:
     QCheckBox *m_external = nullptr;
     QLineEdit *m_externalAddr = nullptr;
     bool m_sessionDirty = false;
+    bool m_wantControllers = false;
     std::vector<class QLabel *> m_romRows;
 };

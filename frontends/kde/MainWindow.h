@@ -7,6 +7,7 @@
 
 #include <QActionGroup>
 #include <QMainWindow>
+#include <QTimer>
 
 #include "cocosession.h"
 
@@ -18,7 +19,14 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(cocosession *session, QWidget *parent = nullptr);
 
+protected:
+    bool event(QEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+
 private:
+    void tick();
+    void runSysaction(int sysact);
+    void toggleControllers();
     void buildMenus();
     void rebuildTvInputMenu();
     void applyDisplaySettings();
@@ -32,6 +40,10 @@ private:
     void status(const QString &message);
 
     cocosession *m_session;
+    /* The pad thread cannot call into Qt: it posts system actions and gamepad
+     * events, and this timer takes them. */
+    QTimer m_tick;
+    unsigned m_padGen = 0;
     DisplayView *m_display;
     QStackedWidget *m_stack;
     QWidget *m_noBios;

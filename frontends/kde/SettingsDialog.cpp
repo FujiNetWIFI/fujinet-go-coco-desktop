@@ -13,6 +13,7 @@
  */
 
 #include "SettingsDialog.h"
+#include "controllers/PadRows.h"
 #include "help/HelpWindow.h"
 
 #include <QComboBox>
@@ -26,6 +27,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 QCheckBox *SettingsDialog::addStartOption(QFormLayout *form,
@@ -83,6 +85,7 @@ void SettingsDialog::done(int result)
                            "127.0.0.1:65504")
                 .arg(m_externalAddr->text()));
         m_externalAddr->setFocus();
+        m_wantControllers = false;
         return;
     }
     if (QString::fromUtf8(cocosession_get_str(m_session,
@@ -144,7 +147,6 @@ SettingsDialog::SettingsDialog(cocosession *session, QWidget *parent)
             &QWidget::setEnabled);
     runtimeForm->addRow(QStringLiteral("Address:port"), m_externalAddr);
     addStartOption(runtimeForm, QStringLiteral("Sound"), "enable_audio", 1);
-    addStartOption(runtimeForm, QStringLiteral("Gamepads"), "enable_gamepad", 1);
     auto *note = new QLabel(
         QStringLiteral("FujiNet listens on the Becker port and the emulator "
                        "connects out to it; with an external FujiNet it "
@@ -157,6 +159,66 @@ SettingsDialog::SettingsDialog(cocosession *session, QWidget *parent)
     gl->addWidget(runtimeBox);
     gl->addStretch(1);
     tabs->addTab(general, QStringLiteral("General"));
+
+    /* Input: the gamepads and which joystick each drives, the controls' reset.
+     * Keys and buttons themselves are mapped in the Controllers window. */
+    auto *input = new QWidget;
+    auto *inputLayout = new QVBoxLayout(input);
+    auto *padBox = new QGroupBox(QStringLiteral("Gamepads"), input);
+    auto *padForm = new QFormLayout(padBox);
+    addStartOption(padForm, QStringLiteral("Gamepads"), "enable_gamepad", 1);
+    auto *analog = new QCheckBox(padBox);
+    analog->setChecked(cocosession_get_int(m_session, "analog_joystick", 1) != 0);
+    analog->setToolTip(QStringLiteral("The pad's stick moves the joystick in proportion; off, it works like a "
+                                      "switch with a full push either way"));
+    connect(analog, &QCheckBox::toggled, this, [this](bool enable) { cocosession_set_analog(m_session, enable ? 1 : 0); });
+    padForm->addRow(QStringLiteral("Analog joystick"), analog);
+    auto *padNote = new QLabel(
+        QStringLiteral("Turning gamepads on or off is applied by restarting the session when this dialog closes."),
+        padBox);
+    padNote->setWordWrap(true);
+    padNote->setStyleSheet(QStringLiteral("color: palette(placeholder-text);"));
+    padForm->addRow(padNote);
+    inputLayout->addWidget(padBox);
+
+    auto *pairBox = new QGroupBox(QStringLiteral("Pads"), input);
+    auto *pairLayout = new QVBoxLayout(pairBox);
+    auto *padRows = new PadRows(m_session, 0, pairBox);
+    pairLayout->addWidget(padRows);
+    inputLayout->addWidget(pairBox);
+    /* pads come and go while the dialog is open */
+    auto *padTimer = new QTimer(this);
+    connect(padTimer, &QTimer::timeout, padRows, [padRows] { padRows->poll(); });
+    padTimer->start(250);
+
+    auto *controlBox = new QGroupBox(QStringLiteral("Controls"), input);
+    auto *controlLayout = new QVBoxLayout(controlBox);
+    auto *controlNote = new QLabel(
+        QStringLiteral("Keys and buttons are mapped in the Controllers window (Ctrl+Shift+K). Every key "
+                       "belongs to the CoCo until you bind it."),
+        controlBox);
+    controlNote->setWordWrap(true);
+    controlNote->setStyleSheet(QStringLiteral("color: palette(placeholder-text);"));
+    auto *controlButtons = new QHBoxLayout;
+    auto *resetControls = new QPushButton(QStringLiteral("Reset Controls"), controlBox);
+    resetControls->setToolTip(QStringLiteral("Put every key and gamepad button back to its default"));
+    auto *openControllers = new QPushButton(QStringLiteral("Open Controllers"), controlBox);
+    connect(resetControls, &QPushButton::clicked, this, [this, resetControls] {
+        cocosession_bindings_reset(m_session);
+        resetControls->setText(QStringLiteral("Controls Reset"));
+    });
+    connect(openControllers, &QPushButton::clicked, this, [this] {
+        m_wantControllers = true;
+        accept();
+    });
+    controlButtons->addWidget(resetControls);
+    controlButtons->addWidget(openControllers);
+    controlButtons->addStretch(1);
+    controlLayout->addWidget(controlNote);
+    controlLayout->addLayout(controlButtons);
+    inputLayout->addWidget(controlBox);
+    inputLayout->addStretch(1);
+    tabs->addTab(input, QStringLiteral("Input"));
 
     /* ROMs: the three system ROMs, grouped, each imported or not. */
     auto *roms = new QWidget;
@@ -199,16 +261,19 @@ SettingsDialog::SettingsDialog(cocosession *session, QWidget *parent)
     refreshRoms();
     tabs->addTab(roms, QStringLiteral("ROMs"));
     if (qgetenv("COCO_OPEN_PREFS") == "ROMs")
+        tabs->setCurrentIndex(2);
+    else if (qgetenv("COCO_OPEN_PREFS") == "Input")
         tabs->setCurrentIndex(1);
     outer->addWidget(tabs);
 
     /* Help, F1 and Ctrl+Shift+H (the app's shortcuts don't reach a modal dialog) */
-    auto pageContext = [tabs](int i) {
-        return i == 1 ? QStringLiteral("prefs/ROMs") : QStringLiteral("prefs/Machine");
+    auto pageContext = [](int page) {
+        return page == 2 ? QStringLiteral("prefs/ROMs")
+             : page == 1 ? QStringLiteral("prefs/Input") : QStringLiteral("prefs/Machine");
     };
     setProperty("cocoHelpContext", pageContext(tabs->currentIndex()));
     connect(tabs, &QTabWidget::currentChanged, this,
-            [this, pageContext](int i) { setProperty("cocoHelpContext", pageContext(i)); });
+            [this, pageContext](int page) { setProperty("cocoHelpContext", pageContext(page)); });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close | QDialogButtonBox::Help, this);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::helpRequested, this, [this] { cocoHelpFor(this); });

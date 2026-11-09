@@ -27,6 +27,7 @@
 #include <QVBoxLayout>
 
 #include "DisplayWidget.h"
+#include "controllers/ControllersWindow.h"
 #include "SoftDisplayWidget.h"
 #include "debugger/DebuggerWindow.h"
 #include "FujiNetWindows.h"
@@ -60,10 +61,61 @@ MainWindow::MainWindow(cocosession *session, QWidget *parent)
     applyDisplaySettings();
     showPage();
 
+    /* One timer for the news the other threads leave: bound pad buttons that
+     * stop in the debugger, and pads plugged in or out (within 50 ms). */
+    m_padGen = cocosession_gamepad_generation(session);
+    connect(&m_tick, &QTimer::timeout, this, &MainWindow::tick);
+    m_tick.start(50);
+
     /* Developer affordance: open the debugger alongside the main window,
      * which is what you want when the app dies before you reach a menu. */
     if (qEnvironmentVariableIsSet("COCO_OPEN_DEBUGGER"))
         DebuggerWindow::show(this, m_session);
+    if (qEnvironmentVariableIsSet("COCO_OPEN_CONTROLLERS"))
+        QTimer::singleShot(0, this, &MainWindow::toggleControllers);
+}
+
+void MainWindow::toggleControllers()
+{
+    cocoControllersToggle(this, m_session);
+}
+
+void MainWindow::tick()
+{
+    int sysact;
+    while (cocosession_sysaction_take(m_session, &sysact))
+        runSysaction(sysact);
+    const unsigned gen = cocosession_gamepad_generation(m_session);
+    if (gen != m_padGen) {
+        m_padGen = gen;
+        char msg[160];
+        if (cocosession_gamepad_last_event(m_session, msg, sizeof msg) > 0)
+            status(QString::fromUtf8(msg));
+    }
+}
+
+void MainWindow::runSysaction(int sysact)
+{
+    if (sysact != COCO_SYSACT_DEBUG_STOP)
+        return;
+    cocosession_sysaction(m_session, sysact);
+    DebuggerWindow::show(this, m_session);
+}
+
+/* Losing the focus lets go of the keys the host keyboard holds (a key
+ * released in another window would never be seen to go up); the Controllers
+ * window's keyboard and the pads are not touched. */
+bool MainWindow::event(QEvent *event)
+{
+    if (event->type() == QEvent::WindowDeactivate)
+        cocosession_release_all(m_session);
+    return QMainWindow::event(event);
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    m_tick.stop();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::status(const QString &message)
@@ -102,6 +154,10 @@ void MainWindow::restartSession()
     cocosession_default_opts(m_session, &opts);
     if (cocosession_start(m_session, &opts) != 0)
         status(QString::fromUtf8(cocosession_last_error(m_session)));
+    /* the pads re-enumerate with the new session: no toast for those, and the
+     * Controllers window starts again from the centred sticks */
+    m_padGen = cocosession_gamepad_generation(m_session);
+    cocoControllersRefresh();
     showPage();
 }
 
@@ -262,6 +318,7 @@ void MainWindow::buildMenus()
         m_machineGroup->addAction(act);
         connect(act, &QAction::triggered, this, [this, i] {
             cocosession_set_machine(m_session, i);
+            cocoControllersRefresh();
             /* The TV input may have been carried to something the new machine
              * can produce, so rebuild rather than assume. */
             rebuildTvInputMenu();
@@ -350,6 +407,15 @@ void MainWindow::buildMenus()
     view->addSeparator();
     view->addAction(QStringLiteral("&Debugger"), QKeySequence(Qt::Key_F12),
                     this, [this] { DebuggerWindow::show(this, m_session); });
+    {
+        /* works from every window of the app (the Controllers window has the
+         * keyboard too); F9 and the function keys belong to the CoCo */
+        QAction *ctlAct = view->addAction(QStringLiteral("C&ontrollers"));
+        ctlAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K));
+        ctlAct->setShortcutContext(Qt::ApplicationShortcut);
+        addAction(ctlAct);
+        connect(ctlAct, &QAction::triggered, this, &MainWindow::toggleControllers);
+    }
 
     QMenu *settings = menuBar()->addMenu(QStringLiteral("&Settings"));
     QAction *settingsAct = settings->addAction(QStringLiteral("&Settings…"), this, [this] {
@@ -358,12 +424,15 @@ void MainWindow::buildMenus()
         connect(&dlg, &SettingsDialog::displayChanged, this,
                 &MainWindow::applyDisplaySettings);
         dlg.exec();
+        const bool wantControllers = dlg.wantsControllers();
         if (dlg.sessionDirty()) {
             restartSession();
             status(QStringLiteral("FujiNet options applied "
                                   "(session restarted)"));
         }
         showPage();
+        if (wantControllers)
+            cocoControllersShow(this, m_session);
     });
     /* Developer affordance, like COCO_OPEN_DEBUGGER. */
     if (qEnvironmentVariableIsSet("COCO_OPEN_SETTINGS"))

@@ -60,10 +60,11 @@ quint32 keysymForKey(const QKeyEvent *event)
 
 } // namespace
 
-static void forwardKey(cocosession *session, const QKeyEvent *event, int down)
+/* The keysym and unicode cocosession_key wants for an event; false for a key
+ * with neither. */
+static bool resolveKey(const QKeyEvent *event, quint32 *keysym_out, quint32 *unicode_out)
 {
     const bool ctrl = event->modifiers().testFlag(Qt::ControlModifier);
-    const bool shift = event->modifiers().testFlag(Qt::ShiftModifier);
     quint32 unicode = 0;
     if (!event->text().isEmpty())
         unicode = event->text().at(0).unicode();
@@ -77,24 +78,52 @@ static void forwardKey(cocosession *session, const QKeyEvent *event, int down)
         else
             keysym = unicode;
     }
-    if (keysym == 0)
+    *keysym_out = keysym;
+    *unicode_out = unicode;
+    return keysym != 0;
+}
+
+static void forwardKey(cocosession *session, const QKeyEvent *event, int down)
+{
+    const bool ctrl = event->modifiers().testFlag(Qt::ControlModifier);
+    const bool shift = event->modifiers().testFlag(Qt::ShiftModifier);
+    quint32 keysym = 0, unicode = 0;
+    if (!resolveKey(event, &keysym, &unicode))
         return;
 
     cocosession_key(session, down, keysym, unicode, ctrl ? 1 : 0,
                       shift ? 1 : 0);
 }
 
+bool cocoIsAppKey(const QKeyEvent *event)
+{
+    const int key = event->key();
+    if (key == Qt::Key_F10 || key == Qt::Key_F11 || key == Qt::Key_F12)
+        return true;
+    /* Ctrl+Shift+letter is the app's (Controllers, Help), never the CoCo's. */
+    const Qt::KeyboardModifiers mods = event->modifiers();
+    return mods.testFlag(Qt::ControlModifier) && mods.testFlag(Qt::ShiftModifier) &&
+           key >= Qt::Key_A && key <= Qt::Key_Z;
+}
+
+uint32_t cocoBindableKey(const QKeyEvent *event)
+{
+    quint32 keysym = 0, unicode = 0;
+    if (!resolveKey(event, &keysym, &unicode))
+        return 0;
+    return cocosession_bindable_key(keysym, unicode);
+}
 
 bool cocoClaimShortcut(QEvent *event)
 {
     /* Claim every key except the reserved chords (F10 menu, F11 fullscreen,
-     * F12 debugger) while focused, so menu accelerators cannot shadow what
-     * the CoCo should receive. Alt in particular must NOT reach the menu bar:
-     * it is a real key on a CoCo 3 keyboard. */
+     * F12 debugger, Ctrl+Shift+letter: Controllers, Help) while focused, so
+     * menu accelerators cannot shadow what the CoCo should receive. Alt in
+     * particular must NOT reach the menu bar: it is a real key on a CoCo 3
+     * keyboard. */
     if (event->type() == QEvent::ShortcutOverride) {
         QKeyEvent *ke = static_cast<QKeyEvent *>(event);
-        if (ke->key() != Qt::Key_F10 && ke->key() != Qt::Key_F11 &&
-            ke->key() != Qt::Key_F12) {
+        if (!cocoIsAppKey(ke)) {
             event->accept();
             return true;
         }
