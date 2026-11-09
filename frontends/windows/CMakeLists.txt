@@ -18,6 +18,8 @@ add_executable(fujinet-go-coco-windows WIN32
   main.c
   display.c
   prefs.c
+  input_prefs.c
+  controllers/controllers_window.c
   debugger/dbg_window.c
   help/help_window.c
   resource.rc

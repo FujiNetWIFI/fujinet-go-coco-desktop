@@ -42,11 +42,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "cocosession.h"
+#include "controllers/controllers_window.h"
 #include "debugger/dbg_window.h"
 #include "display.h"
 #include "help/help_window.h"
+#include "input_prefs.h"
+#include "key_identity.h"
 #include "prefs.h"
 #include "resource.h"
 
@@ -65,6 +69,10 @@ static int g_aspect_mode;
 static int g_smooth;
 static int g_fullscreen;
 static WINDOWPLACEMENT g_prev_placement = {sizeof(g_prev_placement)};
+static HWND g_toast;
+static char g_toast_text[160];
+static unsigned g_pad_generation;
+static DWORD g_pad_quiet_until;
 
 #define S(v) MulDiv((v), g_dpi, 96)
 
@@ -264,105 +272,39 @@ static void show_page(void)
  * US-layout character -- 'a', '1', '-', ... -- which is exactly the
  * "unshifted symbol on the same physical key" coco_key_from_event's own
  * printable_scancode()/unshift_us() want, and is stable across down/up by
- * construction. */
-
-static unsigned special_keysym(WPARAM vk)
-{
-    switch (vk) {
-    case VK_RETURN:   return 0xFF0D;
-    case VK_ESCAPE:   return 0xFF1B;
-    case VK_TAB:      return 0xFF09;
-    case VK_BACK:     return 0xFF08;
-    case VK_DELETE:   return 0xFFFF;
-    case VK_INSERT:   return 0xFF63;
-    case VK_HOME:     return 0xFF50;
-    case VK_END:      return 0xFF57;
-    case VK_PRIOR:    return 0xFF55; /* Page Up */
-    case VK_NEXT:     return 0xFF56; /* Page Down */
-    case VK_UP:       return 0xFF52;
-    case VK_DOWN:     return 0xFF54;
-    case VK_LEFT:     return 0xFF51;
-    case VK_RIGHT:    return 0xFF53;
-    case VK_CAPITAL:  return 0xFFE5;
-    case VK_LSHIFT:   return 0xFFE1;
-    case VK_RSHIFT:   return 0xFFE2;
-    case VK_LCONTROL: return 0xFFE3;
-    case VK_RCONTROL: return 0xFFE4;
-    case VK_LMENU:    return 0xFFE9;
-    case VK_RMENU:    return 0xFFEA;
-    case VK_LWIN:     return 0xFFEB;
-    case VK_RWIN:     return 0xFFEC;
-    case VK_NUMPAD0:  return 0xFFB0;
-    case VK_DECIMAL:  return 0xFFAE;
-    case VK_DIVIDE:   return 0xFFAF;
-    case VK_MULTIPLY: return 0xFFAA;
-    case VK_SUBTRACT: return 0xFFAD;
-    case VK_ADD:      return 0xFFAB;
-    default:
-        if (vk >= VK_F1 && vk <= VK_F12)
-            return 0xFFBE + (unsigned)(vk - VK_F1);
-        if (vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9)
-            return 0xFFB1 + (unsigned)(vk - VK_NUMPAD1);
-        return 0;
-    }
-}
-
-/* The base (unshifted) US-layout character for a printable key -- see the
- * file comment above. Matches core/src/input_map.c's printable_scancode()
- * switch one for one. */
-static uint32_t base_char(WPARAM vk)
-{
-    if (vk >= 'A' && vk <= 'Z') return (uint32_t)(vk - 'A' + 'a');
-    if (vk >= '0' && vk <= '9') return (uint32_t)vk;
-    switch (vk) {
-    case VK_SPACE:      return ' ';
-    case VK_OEM_MINUS:  return '-';
-    case VK_OEM_PLUS:   return '=';
-    case VK_OEM_4:      return '[';
-    case VK_OEM_6:      return ']';
-    case VK_OEM_5:      return '\\';
-    case VK_OEM_1:      return ';';
-    case VK_OEM_7:      return '\'';
-    case VK_OEM_3:      return '`';
-    case VK_OEM_COMMA:  return ',';
-    case VK_OEM_PERIOD: return '.';
-    case VK_OEM_2:      return '/';
-    default:            return 0;
-    }
-}
-
-/* WM_(SYS)KEYDOWN/UP only report the generic VK_SHIFT/CONTROL/MENU; the
- * left/right pair is recovered from the scancode (Shift) or the extended-key
- * bit (Control/Alt), the standard Win32 idiom for this. */
-static WPARAM resolve_side(WPARAM vk, LPARAM lp)
-{
-    UINT scancode;
-    int extended;
-
-    switch (vk) {
-    case VK_SHIFT:
-        scancode = (UINT)((lp >> 16) & 0xFF);
-        return MapVirtualKeyA(scancode, MAPVK_VSC_TO_VK_EX);
-    case VK_CONTROL:
-        extended = (lp & 0x01000000) != 0;
-        return extended ? VK_RCONTROL : VK_LCONTROL;
-    case VK_MENU:
-        extended = (lp & 0x01000000) != 0;
-        return extended ? VK_RMENU : VK_LMENU;
-    default:
-        return vk;
-    }
-}
+ * construction. The translation lives in key_identity.h: the Controllers
+ * window's Map mode captures keys through the same code. */
 
 static void toggle_fullscreen(HWND hwnd);
 static void open_debugger(void);
 
+/* The K of Ctrl+Shift+K was taken for the Controllers window: its release is
+ * not the CoCo's either. */
+static int g_ctlk_swallow;
+
 static void on_key(HWND hwnd, WPARAM vk, LPARAM lp, int down)
 {
-    WPARAM rvk;
     unsigned keysym;
-    uint32_t unicode = 0;
+    uint32_t unicode;
     int ctrl, shift;
+
+    ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+    /* Ctrl+Shift+<letter> is the app's, never the CoCo's (Ctrl+Shift+H is the
+     * Help's, taken before the message gets here). */
+    if (vk == 'K') {
+        if (down && ctrl && shift) {
+            if (!(lp & (1 << 30)))
+                coco_controllers_window_toggle(hwnd, g_session);
+            g_ctlk_swallow = 1;
+            return;
+        }
+        if (!down && g_ctlk_swallow) {
+            g_ctlk_swallow = 0;
+            return;
+        }
+    }
 
     if (down) {
         switch (vk) {
@@ -381,15 +323,8 @@ static void on_key(HWND hwnd, WPARAM vk, LPARAM lp, int down)
         return;
     }
 
-    rvk = resolve_side(vk, lp);
-    keysym = special_keysym(rvk);
-    if (!keysym) {
-        unicode = base_char(rvk);
-        if (!unicode)
-            return; /* not a key the emulated keyboard has */
-    }
-    ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    if (!coco_key_identity(vk, lp, &keysym, &unicode))
+        return; /* not a key the emulated keyboard has */
     cocosession_key(g_session, down, keysym, unicode, ctrl, shift);
 }
 
@@ -402,6 +337,10 @@ static void start_session(void)
     if (cocosession_start(g_session, &opts) != 0)
         MessageBoxA(g_hwnd, cocosession_last_error(g_session),
                     "FujiNet Go CoCo", MB_ICONWARNING);
+    /* pads that were already there are not news after a restart: the
+     * generation moves on without a toast for a moment */
+    g_pad_generation = cocosession_gamepad_generation(g_session);
+    g_pad_quiet_until = GetTickCount() + 1500;
 }
 
 /* Without the system ROMs there is nothing to start: the No-BIOS page shows. */
@@ -411,6 +350,13 @@ static void restart_session(void)
     if (cocosession_has_system_roms(g_session, cocosession_machine(g_session)))
         start_session();
     show_page();
+}
+
+/* The Input window closed: Gamepads on or off takes a restart. */
+static void input_closed(int restart)
+{
+    if (restart)
+        restart_session();
 }
 
 /* After an import: the core rebuilt a running machine in place; one that
@@ -593,6 +539,117 @@ static void open_debugger(void)
     coco_debugger_show(g_hwnd, g_session);
 }
 
+/* ---- notices, session actions ---------------------------------------------------
+ * A gamepad coming or going is told in a small box over the bottom of the
+ * picture for a few seconds. A session action the pad thread or a bound key
+ * posted (Stop in Debugger) is run here, on the UI thread, off a 50 ms timer. */
+
+#define TOAST_MS 4000
+#define IDT_TOAST 2
+
+static LRESULT CALLBACK toast_proc(HWND hwnd, UINT msg, WPARAM wpar, LPARAM lpar)
+{
+    switch (msg) {
+    case WM_NCHITTEST:
+        return HTTRANSPARENT;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT paint;
+        HDC hdc = BeginPaint(hwnd, &paint);
+        RECT rect;
+        wchar_t *wide = coco_wide_dup(g_toast_text);
+        HBRUSH brush = CreateSolidBrush(RGB(0x20, 0x22, 0x24));
+        HGDIOBJ oldfont = SelectObject(hdc, g_ui_font);
+        GetClientRect(hwnd, &rect);
+        FillRect(hdc, &rect, brush);
+        DeleteObject(brush);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(0xF2, 0xF2, 0xF2));
+        if (wide) {
+            DrawTextW(hdc, wide, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            free(wide);
+        }
+        SelectObject(hdc, oldfont);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    }
+    return DefWindowProcA(hwnd, msg, wpar, lpar);
+}
+
+static void create_toast(HINSTANCE inst)
+{
+    WNDCLASSA wcls;
+    memset(&wcls, 0, sizeof(wcls));
+    wcls.lpfnWndProc = toast_proc;
+    wcls.hInstance = inst;
+    wcls.lpszClassName = "CocoToast";
+    RegisterClassA(&wcls);
+    g_toast = CreateWindowA("CocoToast", "", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, g_hwnd, NULL, inst, NULL);
+}
+
+static void notice(const char *text)
+{
+    RECT client;
+    SIZE extent = {0, 0};
+    wchar_t *wide;
+    int wid, hgt;
+    HDC hdc;
+    HGDIOBJ old;
+    HRGN rounded;
+
+    if (!g_toast || !text || !*text)
+        return;
+    snprintf(g_toast_text, sizeof(g_toast_text), "%s", text);
+    wide = coco_wide_dup(g_toast_text);
+    hdc = GetDC(g_hwnd);
+    old = SelectObject(hdc, g_ui_font);
+    if (wide)
+        GetTextExtentPoint32W(hdc, wide, (int)wcslen(wide), &extent);
+    SelectObject(hdc, old);
+    ReleaseDC(g_hwnd, hdc);
+    free(wide);
+    GetClientRect(g_hwnd, &client);
+    wid = extent.cx + S(32);
+    if (wid > client.right - S(24))
+        wid = client.right - S(24);
+    hgt = extent.cy + S(18);
+    if (wid < S(40) || hgt < S(16))
+        return;
+    SetWindowPos(g_toast, HWND_TOP, (client.right - wid) / 2, client.bottom - hgt - S(24), wid, hgt,
+                 SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    rounded = CreateRoundRectRgn(0, 0, wid + 1, hgt + 1, S(12), S(12));
+    SetWindowRgn(g_toast, rounded, TRUE);
+    InvalidateRect(g_toast, NULL, TRUE);
+    SetTimer(g_hwnd, IDT_TOAST, TOAST_MS, NULL);
+}
+
+/* The session actions posted off the UI thread, and a pad coming or going:
+ * the session bumps a generation on every add/remove and keeps the last event
+ * as text. */
+static void poll_background(void)
+{
+    int sysact;
+    unsigned gen;
+    char text[160];
+
+    while (cocosession_sysaction_take(g_session, &sysact)) {
+        if (sysact == COCO_SYSACT_DEBUG_STOP) {
+            cocosession_sysaction(g_session, sysact);
+            open_debugger();
+        }
+    }
+    gen = cocosession_gamepad_generation(g_session);
+    if (gen == g_pad_generation)
+        return;
+    g_pad_generation = gen;
+    if (GetTickCount() >= g_pad_quiet_until && cocosession_gamepad_last_event(g_session, text, sizeof(text)) > 0)
+        notice(text);
+    coco_controllers_window_refresh();
+    coco_input_prefs_gamepads_changed();
+}
+
 /* ---- fullscreen -------------------------------------------------------------- */
 
 static void toggle_fullscreen(HWND hwnd)
@@ -675,6 +732,7 @@ static HMENU build_menu(void)
     AppendMenuA(machine, MF_STRING, IDM_ROMS, "&ROMs...");
     AppendMenuA(machine, MF_SEPARATOR, 0, NULL);
     AppendMenuA(machine, MF_STRING, IDM_SETTINGS, "Settings...");
+    AppendMenuA(machine, MF_STRING, IDM_INPUT, "&Input...");
     AppendMenuA(machine, MF_SEPARATOR, 0, NULL);
     AppendMenuA(machine, MF_STRING, IDM_EXIT, "E&xit");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)machine, "&Machine");
@@ -692,6 +750,7 @@ static HMENU build_menu(void)
                       (unsigned)(IDM_CPU_BASE + cocosession_cpu(g_session)));
     AppendMenuA(view, MF_STRING, IDM_FULLSCREEN, "Fullscreen\tF11");
     AppendMenuA(view, MF_STRING, IDM_DEBUGGER, "Debugger\tF12");
+    AppendMenuA(view, MF_STRING, IDM_CONTROLLERS, "C&ontrollers\tCtrl+Shift+K");
     AppendMenuA(bar, MF_POPUP, (UINT_PTR)view, "&View");
 
     AppendMenuA(media, MF_STRING, IDM_IMPORT_MEDIA, "Import Disk or Tape Image...");
@@ -730,13 +789,14 @@ static void apply_display_settings(void)
 }
 
 /* ---- settings window ---------------------------------------------------------
- * Aspect ratio and smooth scaling apply live; FujiNet/Sound/Gamepads decide
+ * Aspect ratio and smooth scaling apply live; FujiNet/Sound decide
  * what the session starts with, so -- like GNOME's Preferences dialog
  * (frontends/gnome/prefs.c), same keys and defaults, so a machine
  * configured in one frontend shows up the same in another -- they are
  * applied by restarting the session when this window closes. Machine/TV
  * input/Artifact Colour/CPU are not duplicated here: they already live in
- * the main menu as live radio groups. */
+ * the main menu as live radio groups. Gamepads is in the Input window
+ * (input_prefs.c), applied the same way. */
 
 #ifndef EM_SETCUEBANNER
 #define EM_SETCUEBANNER 0x1501
@@ -822,9 +882,6 @@ static LRESULT CALLBACK settings_proc(HWND hwnd, UINT msg, WPARAM wp,
         case IDC_SET_AUDIO:
             settings_apply_checkbox(hwnd, IDC_SET_AUDIO, "enable_audio", 1);
             return 0;
-        case IDC_SET_GAMEPAD:
-            settings_apply_checkbox(hwnd, IDC_SET_GAMEPAD, "enable_gamepad", 1);
-            return 0;
         default:
             break;
         }
@@ -887,7 +944,7 @@ static void show_settings(HINSTANCE inst)
     g_settings_window = CreateWindowA(
         "CocoSettingsWindow", "Settings",
         WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME),
-        CW_USEDEFAULT, CW_USEDEFAULT, 380, 420, NULL, NULL, inst, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 380, 392, NULL, NULL, inst, NULL);
 
     CreateWindowExA(0, "STATIC", "Aspect ratio:", WS_CHILD | WS_VISIBLE, 16,
                     y, 120, 20, g_settings_window, NULL, inst, NULL);
@@ -941,9 +998,7 @@ static void show_settings(HINSTANCE inst)
     settings_checkbox(g_settings_window, inst, "Sound", IDC_SET_AUDIO, y,
                       cocosession_get_int(g_session, "enable_audio", 1));
     y += 28;
-    settings_checkbox(g_settings_window, inst, "Gamepads", IDC_SET_GAMEPAD, y,
-                      cocosession_get_int(g_session, "enable_gamepad", 1));
-    y += 36;
+    y += 8;
     {
         HWND hb = CreateWindowExA(0, "BUTTON", "Help", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                   16, y, 80, 26, g_settings_window, (HMENU)(INT_PTR)IDC_SET_HELP, inst, NULL);
@@ -964,6 +1019,9 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
+        /* Map mode in the Controllers window takes the key as a binding */
+        if (coco_controllers_map_key(msg, wp, lp))
+            return 0;
         on_key(hwnd, wp, lp, 1);
         /* F10 falls through to DefWindowProc so the system opens the menu;
          * everything else is fully handled above. */
@@ -972,16 +1030,38 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_KEYUP:
     case WM_SYSKEYUP:
+        if (coco_controllers_map_key(msg, wp, lp))
+            return 0;
         on_key(hwnd, wp, lp, 0);
         if (wp == VK_F10)
             break;
+        return 0;
+    case WM_ACTIVATE:
+        /* nothing the host keyboard holds stays down while another window has
+         * the keys (the Controllers window's own keys and latches stay) */
+        if (LOWORD(wp) == WA_INACTIVE)
+            cocosession_release_all(g_session);
+        break;
+    case WM_ENTERMENULOOP:
+        /* the menu takes the keyboard: what was held lets go now */
+        cocosession_release_all(g_session);
+        break;
+    case WM_TIMER:
+        if (wp == IDT_SYSACT) {
+            poll_background();
+        } else if (wp == IDT_TOAST) {
+            KillTimer(hwnd, IDT_TOAST);
+            ShowWindow(g_toast, SW_HIDE);
+        }
         return 0;
     case WM_COMMAND: {
         unsigned id = LOWORD(wp);
         if (id >= IDM_MACHINE_BASE && id < IDM_MACHINE_BASE + IDM_RADIO_SPAN) {
             cocosession_set_machine(g_session, (int)(id - IDM_MACHINE_BASE));
+            cocosession_keyboard_release(g_session);
             rebuild_menu(hwnd);
             start_machine();
+            coco_controllers_window_refresh();
         } else if (id >= IDM_TVINPUT_BASE &&
                   id < IDM_TVINPUT_BASE + IDM_RADIO_SPAN) {
             cocosession_set_tv_input(g_session, (int)(id - IDM_TVINPUT_BASE));
@@ -996,6 +1076,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDM_RESET:          cocosession_reset(g_session); break;
         case IDM_SETTINGS:
             show_settings((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE));
+            break;
+        case IDM_INPUT:
+            coco_input_prefs_show(hwnd, g_session, input_closed);
+            break;
+        case IDM_CONTROLLERS:
+            coco_controllers_window_toggle(hwnd, g_session);
             break;
         case IDM_IMPORT_MEDIA:   import_media(hwnd); break;
         case IDM_IMPORT_BIOS:
@@ -1048,6 +1134,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_DESTROY:
+        KillTimer(hwnd, IDT_SYSACT);
+        KillTimer(hwnd, IDT_TOAST);
         PostQuitMessage(0);
         return 0;
     }
@@ -1100,14 +1188,20 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         return 1;
     g_display = coco_display_create(g_hwnd, g_session);
     create_nobios(inst);
+    create_toast(inst);
     show_page();
     ShowWindow(g_hwnd, show);
+    g_pad_generation = cocosession_gamepad_generation(g_session);
+    SetTimer(g_hwnd, IDT_SYSACT, 50, NULL);
 
     /* Developer affordance: open the debugger alongside the main window,
      * which is what you want when the app dies before you can reach a
      * menu. Matches the other frontends' COCO_OPEN_DEBUGGER convention. */
     if (getenv("COCO_OPEN_DEBUGGER"))
         open_debugger();
+    /* The same for the Controllers window. */
+    if (getenv("COCO_OPEN_CONTROLLERS"))
+        coco_controllers_window_toggle(g_hwnd, g_session);
 
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
         /* The debugger's F5/F7/F8/Shift+F8 accelerators get first refusal
@@ -1115,6 +1209,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         if (coco_debugger_pretranslate(&msg))
             continue;
         if (coco_help_pretranslate(&msg))
+            continue;
+        if (coco_input_prefs_pretranslate(&msg))
             continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);

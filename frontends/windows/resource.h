@@ -23,18 +23,31 @@
 #define IDM_IMPORT_BIOS_DIR 211
 #define IDM_ROMS           212
 #define IDM_HELP           213
+#define IDM_CONTROLLERS    214
+#define IDM_INPUT          215
 
 /* Settings window child control ids. */
 #define IDC_SET_ASPECT     220
 #define IDC_SET_SMOOTH     221
 #define IDC_SET_FUJINET    222
 #define IDC_SET_AUDIO      223
-#define IDC_SET_GAMEPAD    224
 #define IDC_SET_NOTE       225
 #define IDC_SET_EXTERNAL   226
 #define IDC_SET_ADDR       227
 #define IDC_SET_HELP       228
 #define IDC_LOG_HELP       229
+
+/* Input window child control ids. */
+#define IDC_INPUT_GAMEPAD  250
+#define IDC_INPUT_ANALOG   251
+#define IDC_INPUT_RESET    252
+#define IDC_INPUT_OPEN     253
+#define IDC_INPUT_HELP     254
+#define IDC_INPUT_CLOSE    255
+#define IDC_INPUT_PAD_BASE 260  /* one per pad, 8 of them */
+
+/* Main window timer. */
+#define IDT_SYSACT         1
 
 #define IDM_MACHINE_BASE   300
 #define IDM_TVINPUT_BASE   320
