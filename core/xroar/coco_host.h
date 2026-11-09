@@ -117,6 +117,8 @@ int  cocohost_core_start(int machine, int tv_input, int ccr, int cpu);
 void cocohost_core_run_frame(void);  /* advances one ~60Hz frame */
 void cocohost_core_stop(void);
 void cocohost_core_reset(void);      /* queued hard reset */
+/* For tests: 1 (and clears it) if a hard reset is queued and not yet taken. */
+int  cocohost_take_reset_request(void);
 
 /* Live TV-input / artifact-mode switch (COCO_TV_*); applied on the emulator
  * thread. */
@@ -159,6 +161,12 @@ void cocohost_inject_key(int down, int scancode);
  * the window loses focus, so a key held across a focus change does not stick
  * down inside the machine forever. */
 void cocohost_release_all_keys(void);
+/* The emulator thread's per-frame drain of the queue above: hands each queued
+ * event to sink(down, scancode) in order and returns how many it delivered. A
+ * release is held back to the next call when the same drain pressed that key,
+ * so the machine always sees a key held for at least one frame. Exported so a
+ * test can run it without a machine. */
+int  cocohost_drain_keys(void (*sink)(int down, int scancode));
 /* Analog joystick: port 0=right 1=left; axis 0=X 1=Y; value 0..65535
  * (32767 = centre). */
 void cocohost_set_joystick_axis(int port, int axis, int value);

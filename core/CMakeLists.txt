@@ -253,6 +253,11 @@ add_library(cocosession STATIC
   src/roms.c
   src/zipread.c
   src/input_map.c
+  src/input.c
+  src/bindings.c
+  src/controls.c
+  src/keyboard.c
+  src/pad_assign.c
   src/audio_sdl.c
   src/gamepad_sdl.c
   src/fujinet_runtime.c
@@ -311,6 +316,35 @@ endif()
 # ---- tests -----------------------------------------------------------------
 add_executable(input_test tests/input_test.c)
 target_link_libraries(input_test cocosession)
+target_include_directories(input_test PRIVATE src)
+
+# The remembered pad -> port table (the "pad_assign" setting's text form): pure.
+add_executable(pad_assign_test tests/pad_assign_test.c)
+target_link_libraries(pad_assign_test cocosession)
+target_include_directories(pad_assign_test PRIVATE src)
+
+# The remappable binding table and the key router: no ROMs, no machine.
+add_executable(bindings_test tests/bindings_test.c)
+target_link_libraries(bindings_test cocosession)
+target_include_directories(bindings_test PRIVATE src)
+
+# The on-screen joysticks and keyboard: layouts, hit tests, the stick's
+# gesture maths, the caps against the host key path.
+add_executable(controls_test tests/controls_test.c)
+target_link_libraries(controls_test cocosession)
+target_include_directories(controls_test PRIVATE src)
+
+# The gamepad layer's pure helpers, and that the SDL subsystem starts and
+# stops with no hardware attached.
+add_executable(gamepad_test tests/gamepad_test.c)
+target_link_libraries(gamepad_test cocosession)
+target_include_directories(gamepad_test PRIVATE src)
+
+# The gamepad layer end to end with an SDL3 virtual gamepad. SKIPs (77) where
+# SDL has no virtual joysticks.
+add_executable(gamepad_map_test tests/gamepad_map_test.c)
+target_link_libraries(gamepad_map_test cocosession SDL3::SDL3)
+target_include_directories(gamepad_map_test PRIVATE src)
 
 add_executable(hostport_test tests/hostport_test.c)
 target_link_libraries(hostport_test cocosession)
@@ -388,6 +422,12 @@ target_include_directories(gimerow_test PRIVATE debugger
 target_compile_options(gimerow_test PRIVATE -Wall -Wextra -Wno-unused-function)
 
 add_test(NAME input COMMAND input_test)
+add_test(NAME pad_assign COMMAND pad_assign_test)
+add_test(NAME bindings COMMAND bindings_test)
+add_test(NAME controls COMMAND controls_test)
+add_test(NAME gamepad COMMAND gamepad_test)
+add_test(NAME gamepad_map COMMAND gamepad_map_test)
+set_tests_properties(gamepad_map PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 add_test(NAME hostport COMMAND hostport_test)
 add_test(NAME help COMMAND help_test)
 add_test(NAME session COMMAND session_test)

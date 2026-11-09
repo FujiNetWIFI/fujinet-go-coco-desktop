@@ -38,6 +38,25 @@ void session_set_error(cocosession *s, const char *fmt, ...)
     fprintf(stderr, "cocosession: %s\n", s->last_error);
 }
 
+void session_gamepad_event(cocosession *sess, const char *text)
+{
+    pthread_mutex_lock(&sess->pad_event_mtx);
+    snprintf(sess->pad_event, sizeof sess->pad_event, "%s", text ? text : "");
+    pthread_mutex_unlock(&sess->pad_event_mtx);
+}
+
+int cocosession_gamepad_last_event(cocosession *sess, char *dst, int dstsz)
+{
+    int len;
+
+    if (!dst || dstsz <= 0)
+        return 0;
+    pthread_mutex_lock(&sess->pad_event_mtx);
+    len = snprintf(dst, (size_t)dstsz, "%s", sess->pad_event);
+    pthread_mutex_unlock(&sess->pad_event_mtx);
+    return len;
+}
+
 static long read_timer_us(void)
 {
     struct timespec ts;
@@ -389,10 +408,15 @@ cocosession *cocosession_new(const cocosession_paths *paths)
     pthread_mutex_init(&s->cb_mtx, NULL);
     pthread_mutex_init(&s->vs_mtx, NULL);
     pthread_mutex_init(&s->start_mtx, NULL);
+    pthread_mutex_init(&s->input_mtx, NULL);
+    pthread_mutex_init(&s->sysact_mtx, NULL);
+    pthread_mutex_init(&s->pad_event_mtx, NULL);
     coco_cond_init_monotonic(&s->vs_cv);
     coco_cond_init_monotonic(&s->start_cv);
+    input_init(s);
 
     settings_init(s);
+    bindings_init(s);
 
     /* Publish the persisted machine/video selection immediately, so the
      * accessors mean something before (and without) a start. The frontends
@@ -415,6 +439,7 @@ void cocosession_free(cocosession *s)
     if (!s) return;
     cocosession_stop(s);
     cocosession_settings_flush(s);
+    bindings_detach(s);
     settings_free_all(s);
     cocodebug_destroy(s->debugger);
     pthread_mutex_destroy(&s->lifecycle_mtx);
@@ -422,6 +447,9 @@ void cocosession_free(cocosession *s)
     pthread_mutex_destroy(&s->cb_mtx);
     pthread_mutex_destroy(&s->vs_mtx);
     pthread_mutex_destroy(&s->start_mtx);
+    pthread_mutex_destroy(&s->input_mtx);
+    pthread_mutex_destroy(&s->sysact_mtx);
+    pthread_mutex_destroy(&s->pad_event_mtx);
     pthread_cond_destroy(&s->vs_cv);
     pthread_cond_destroy(&s->start_cv);
     free(s->frame);
@@ -451,6 +479,7 @@ void cocosession_default_opts(cocosession *s, cocosession_start_opts *opts)
              cocosession_get_str(s, "fujinet_external_addr", ""));
     opts->enable_audio = cocosession_get_int(s, "enable_audio", 1) ? 1 : 0;
     opts->enable_gamepad = cocosession_get_int(s, "enable_gamepad", 1) ? 1 : 0;
+    opts->analog_joystick = cocosession_get_int(s, "analog_joystick", 1) ? 1 : 0;
 }
 
 int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
@@ -532,6 +561,7 @@ int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
     s->vs_seen_ns = 0;
     s->vs_iv_us = 0;
     s->core_started = 0;
+    input_clear(s);
     s->running = 1;
     if (pthread_create(&s->emu_thread, NULL, emu_thread_main, s) != 0) {
         s->running = 0;
@@ -634,6 +664,9 @@ void cocosession_set_machine(cocosession *s, int machine)
      * carry the TV input to something that machine can actually produce. */
     if (!cocosession_tv_input_supported(machine, s->cur_tv_input))
         s->cur_tv_input = COCOSESSION_TV_COMPOSITE_BR;
+    /* the keyboard's caps are the old machine's: let go of them (and any
+     * latched modifier) before the layout changes under the Controllers window */
+    cocosession_keyboard_release(s);
     s->cur_machine = machine;
     cocosession_set_int(s, "machine", machine);
     cocosession_set_int(s, "tv_input", s->cur_tv_input);
@@ -683,34 +716,6 @@ int cocosession_cpu(const cocosession *s)      { return s ? s->cur_cpu : 0; }
 /****************************************************************************/
 /** Input / audio / misc accessors                                         **/
 /****************************************************************************/
-
-void cocosession_key(cocosession *s, int down, uint32_t keysym,
-                     uint32_t unicode, int ctrl_down, int shift_down)
-{
-    unsigned scancode = 0;
-
-    if (!s->running) return;
-    if (!coco_key_from_event(keysym, unicode, ctrl_down, shift_down, &scancode))
-        return;
-    cocohost_inject_key(down, (int)scancode);
-}
-
-void cocosession_joystick(cocosession *s, int port, float x, float y)
-{
-    if (!s->running) return;
-    /* The deadzone is applied by whoever produced these -- the SDL gamepad
-     * backend, or a frontend driving the joystick from the mouse -- so pass
-     * the reading straight through the range conversion. */
-    cocohost_set_joystick_axis(port, 0, coco_axis_from_stick(x, 0.0f));
-    cocohost_set_joystick_axis(port, 1, coco_axis_from_stick(y, 0.0f));
-}
-
-void cocosession_joystick_button(cocosession *s, int port, int button,
-                                 int pressed)
-{
-    if (!s->running) return;
-    cocohost_set_joystick_button(port, button, pressed);
-}
 
 void cocosession_reset(cocosession *s)
 {

@@ -368,20 +368,49 @@ void cocohost_core_reset(void) {
     atomic_store(&g_pending_reset, 1);
 }
 
-static void apply_pending_commands(void) {
-    /* Keyboard */
+int cocohost_take_reset_request(void) {
+    return atomic_exchange(&g_pending_reset, 0);
+}
+
+/* The queue's drain, one frame's worth. A release is not delivered in the
+ * same drain as the press of the same key: applied together, the machine would
+ * never see the key held, and a fast click (a touch tap, a scripted click)
+ * would be lost. The release stays at the head of the queue for the next
+ * frame. */
+int cocohost_drain_keys(void (*sink)(int down, int scancode)) {
+    uint8_t pressed[256 / 8];
+    int delivered = 0;
+
+    memset(pressed, 0, sizeof(pressed));
     pthread_mutex_lock(&g_cmd_mutex);
     while (g_key_head != g_key_tail) {
-        struct key_event ev = g_key_q[g_key_head];
+        struct key_event event = g_key_q[g_key_head];
+        uint8_t bit = (uint8_t)(1u << (event.scancode & 7));
+
+        if (!event.down && (pressed[event.scancode >> 3] & bit))
+            break;
         g_key_head = (g_key_head + 1) % KEY_Q_SIZE;
+        if (event.down)
+            pressed[event.scancode >> 3] |= bit;
         pthread_mutex_unlock(&g_cmd_mutex);
-        if (ev.down)
-            hk_scan_press((uint8_t)ev.scancode);
-        else
-            hk_scan_release((uint8_t)ev.scancode);
+        sink(event.down, event.scancode);
+        delivered++;
         pthread_mutex_lock(&g_cmd_mutex);
     }
     pthread_mutex_unlock(&g_cmd_mutex);
+    return delivered;
+}
+
+static void key_sink(int down, int scancode) {
+    if (down)
+        hk_scan_press((uint8_t)scancode);
+    else
+        hk_scan_release((uint8_t)scancode);
+}
+
+static void apply_pending_commands(void) {
+    /* Keyboard */
+    cocohost_drain_keys(key_sink);
 
     int tv = atomic_exchange(&g_pending_tv_input, -1);
     if (tv >= 0) {

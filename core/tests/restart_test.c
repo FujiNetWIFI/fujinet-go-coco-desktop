@@ -18,6 +18,7 @@
 #include <time.h>
 #include <zlib.h>
 
+#include "coco_host.h"
 #include "cocosession.h"
 #include "rom_forge.h"
 
@@ -66,6 +67,85 @@ static int start(cocosession *s, int machine)
     return cocosession_start(s, &opts);
 }
 
+static void confirm(const char *what, int cond)
+{
+    if (cond) {
+        printf("ok   %s\n", what);
+    } else {
+        printf("FAIL %s\n", what);
+        failures++;
+    }
+}
+
+static int start_with_pad(cocosession *sess, int machine)
+{
+    cocosession_start_opts opts;
+
+    cocosession_default_opts(sess, &opts);
+    opts.machine = machine;
+    opts.enable_fujinet = 0;
+    opts.enable_audio = 0;
+    opts.enable_gamepad = 1;
+    return cocosession_start(sess, &opts);
+}
+
+/* The index of the cap labelled `label` in the machine's keyboard, or -1. */
+static int cap_index(int machine, const char *label)
+{
+    int count = 0, idx;
+    const coco_keycap *caps = cocosession_keyboard_layout(machine, &count, NULL, NULL);
+
+    for (idx = 0; idx < count; idx++)
+        if (!strcmp(caps[idx].label, label)) return idx;
+    return -1;
+}
+
+/* Nothing held survives a restart: a stick dragged to a corner, a button, a
+ * latched SHIFT cap. */
+static void controls_do_not_survive(cocosession *sess)
+{
+    const int shift = cap_index(COCOSESSION_MACHINE_COCO3, "SHIFT");
+    int xaxis = 0, yaxis = 0;
+
+    cocosession_set_machine(sess, COCOSESSION_MACHINE_COCO3);
+    confirm("starts for the controls", start(sess, COCOSESSION_MACHINE_COCO3) == 0);
+    cocosession_pointer_set(sess, 0, 1000, -1000, 3);
+    cocosession_keyboard_press(sess, shift, 1);
+    confirm("the stick is dragged and SHIFT latched",
+            cocohost_get_joystick_axis(0, 0) == 65535 && cocohost_get_joystick_axis(0, 1) == 0
+            && cocohost_get_joystick_button(0, 1) == 1 && cocosession_keyboard_held(sess, shift) == 3);
+    cocosession_stop(sess);
+    confirm("starts again", start(sess, COCOSESSION_MACHINE_COCO3) == 0);
+    cocosession_joystick_held(sess, 0, &xaxis, &yaxis);
+    confirm("and the stick is centred, the buttons up, SHIFT unlatched",
+            cocohost_get_joystick_axis(0, 0) == 32767 && cocohost_get_joystick_axis(0, 1) == 32767
+            && cocohost_get_joystick_axis(1, 0) == 32767 && cocohost_get_joystick_axis(1, 1) == 32767
+            && cocohost_get_joystick_button(0, 0) == 0 && cocohost_get_joystick_button(0, 1) == 0
+            && xaxis == 0 && yaxis == 0 && cocosession_buttons_held(sess, 0) == 0
+            && cocosession_keyboard_held(sess, shift) == 0);
+    cocosession_stop(sess);
+}
+
+/* The gamepad thread joins before the next xroar_init: it only touches the
+ * session's input state, never XRoar. */
+static void gamepad_thread_rounds(cocosession *sess)
+{
+    int round;
+
+    for (round = 0; round < 4; round++) {
+        char what[64];
+        const unsigned generation = cocosession_gamepad_generation(sess);
+
+        snprintf(what, sizeof(what), "start %d of 4 with the gamepad thread", round + 1);
+        confirm(what, start_with_pad(sess, round & 1 ? COCOSESSION_MACHINE_COCO3
+                                                      : COCOSESSION_MACHINE_COCO2) == 0);
+        nap_ms(150);
+        cocosession_stop(sess);
+        confirm("...and it stops", !cocosession_is_running(sess));
+        confirm("...with the generation kept", cocosession_gamepad_generation(sess) >= generation);
+    }
+}
+
 int main(void)
 {
     static uint8_t bas13[0x2000];
@@ -99,6 +179,9 @@ int main(void)
         cocosession_stop(s);
         ok("...and stops", !cocosession_is_running(s));
     }
+
+    controls_do_not_survive(s);
+    gamepad_thread_rounds(s);
 
     /* Import into a running machine: it is rebuilt in place, not restarted. */
     ok("starts again", start(s, COCOSESSION_MACHINE_COCO2) == 0);

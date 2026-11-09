@@ -17,6 +17,20 @@
 
 #define COCO_PATH_MAX 1024
 
+/* Sources of a held input (see struct cocosession): the host keyboard and the
+ * Controllers window's buttons, each pad's buttons and its stick (by the
+ * stable owner number its slot was given, 0 to COCO_MAX_PADS - 1), and the
+ * pointer's drag. */
+#define COCO_MAX_PADS 8
+#define SRC_KEYBOARD     1u
+#define SRC_PAD(owner)   (1u << (1 + (owner)))
+#define SRC_STICK(owner) (1u << (1 + COCO_MAX_PADS + (owner)))
+#define SRC_POINTER      (1u << (1 + 2 * COCO_MAX_PADS))
+
+/* key_src bits: who holds a machine key down */
+#define KEYSRC_PHYSICAL 1u    /* the host keyboard */
+#define KEYSRC_CAP      2u    /* the Controllers window's keyboard */
+
 #define COCO_FB_MAX_PIXELS \
     (COCOSESSION_FB_MAX_WIDTH * COCOSESSION_FB_MAX_HEIGHT)
 
@@ -104,6 +118,37 @@ struct cocosession {
     void *gamepad; /* gamepad_sdl.c state */
     volatile int audio_mute;
 
+    /* ---- input: what drives the joysticks, RESET and the machine's keys ----
+     * One bit per source (SRC_*) for every digital contact, and one analog
+     * deflection per source, so letting go of one source never releases
+     * another's. input_mtx covers all of it, and the calls that hand the
+     * merged result to the host. held_keysym is the UI thread's alone. */
+    pthread_mutex_t input_mtx;
+    uint32_t dir_src[COCOSESSION_JOYSTICK_PORTS][4];  /* RIGHT LEFT UP DOWN */
+    uint32_t btn_src[COCOSESSION_JOYSTICK_PORTS][2];  /* BUTTON1 BUTTON2 */
+    uint32_t sw_src[COCO_SW_COUNT];
+    /* analog deflection (milli-units) per source; [COCO_MAX_PADS] is the
+     * pointer */
+    int16_t an_x[COCO_MAX_PADS + 1][COCOSESSION_JOYSTICK_PORTS];
+    int16_t an_y[COCO_MAX_PADS + 1][COCOSESSION_JOYSTICK_PORTS];
+    /* the machine's keys by HID usage: KEYSRC_* bits; and the modifier caps
+     * latched on in the Controllers window */
+    uint8_t key_src[256];
+    uint8_t cap_latch[256 / 8];
+    /* keys the keyboard currently holds, by target, so a release clears
+     * exactly what its press asserted even if the binding changed meanwhile */
+    uint32_t held_keysym[COCO_TARGET_COUNT];
+
+    /* cross-thread system-action latch (see cocosession_sysaction_post) */
+    pthread_mutex_t sysact_mtx;
+    unsigned sysact_pending;
+    /* the last gamepad hot-plug event, for a frontend toast */
+    pthread_mutex_t pad_event_mtx;
+    char pad_event[160];
+    /* the gamepad generation, carried across session restarts so it only
+     * ever increases */
+    unsigned pad_gen_base;
+
     /* ---- FujiNet runtime (fujinet_runtime.c) ---- */
     int fujinet_loaded;  /* dlopen'd (kept for process lifetime) */
     int fujinet_running;
@@ -141,6 +186,27 @@ void audio_stop(cocosession *s);
 /* gamepad_sdl.c */
 int  gamepad_start(cocosession *s);
 void gamepad_stop(cocosession *s);
+/* Called by the gamepad thread for the pad that owns `owner`. press: a pad
+ * button drives a target (a direction, a fire button, RESET) -- the pad's
+ * SRC_PAD source. stick: a digital stick or hat drives one direction -- its
+ * SRC_STICK source. analog: the pad's analog stick deflection on a port,
+ * milli-units (0, 0 releases it). */
+void session_gamepad_press(cocosession *sess, int owner, int target, int down);
+void session_gamepad_stick(cocosession *sess, int owner, int port, int act, int down);
+void session_gamepad_analog(cocosession *sess, int owner, int port, int xaxis, int yaxis);
+/* Called by the gamepad thread on a connect/disconnect. */
+void session_gamepad_event(cocosession *sess, const char *text);
+
+/* input.c */
+void input_init(cocosession *sess);
+/* A start: nothing is held, the joysticks are centred and the machine told. */
+void input_clear(cocosession *sess);
+/* The host keyboard's key, after bindings declined it, onto the machine. */
+void session_physical_key(cocosession *sess, int down, uint32_t keysym, uint32_t unicode,
+                          int ctrl_down, int shift_down);
+/* bindings.c: reloads the table from s's settings; unhooks s on free */
+void bindings_init(cocosession *sess);
+void bindings_detach(cocosession *sess);
 
 /* debugger.c -- all emulator-thread side except create/destroy and
  * trace_install. */

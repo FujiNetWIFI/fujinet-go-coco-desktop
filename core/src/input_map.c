@@ -27,7 +27,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "cocosession.h"
 
@@ -327,4 +329,111 @@ int coco_pad_for_port(const int *bindings, int npads, int port)
         seen++;
     }
     return -1;
+}
+
+int coco_axis_from_deflection(int milli)
+{
+    if (milli < -1000) milli = -1000;
+    if (milli > 1000) milli = 1000;
+    return coco_axis_from_stick((float)milli / 1000.0f, 0.0f);
+}
+
+int coco_axis_6bit(int milli)
+{
+    if (milli < -1000) milli = -1000;
+    if (milli > 1000) milli = 1000;
+    return (milli + 1000) * 63 / 2000;
+}
+
+/* A pad stick's radial dead zone: 0.15 of full travel, the Android app's
+ * per-axis 0.18 made round. */
+#define STICK_DEADZONE 0.15f
+
+void coco_deflect_from_stick(float xval, float yval, int *xaxis, int *yaxis)
+{
+    const float mag = sqrtf(xval * xval + yval * yval);
+    float scale;
+    int xmilli, ymilli;
+
+    if (!(mag > STICK_DEADZONE)) {          /* also catches NaN */
+        *xaxis = *yaxis = 0;
+        return;
+    }
+    /* the deflection past the dead zone, rescaled to 0..1 along the same
+     * direction */
+    scale = (((mag > 1.0f ? 1.0f : mag) - STICK_DEADZONE) / (1.0f - STICK_DEADZONE)) / mag;
+    xmilli = (int)lroundf(xval * scale * 1000.0f);
+    ymilli = (int)lroundf(yval * scale * 1000.0f);
+    *xaxis = xmilli < -1000 ? -1000 : xmilli > 1000 ? 1000 : xmilli;
+    *yaxis = ymilli < -1000 ? -1000 : ymilli > 1000 ? 1000 : ymilli;
+}
+
+/* ---- the key identity bindings use ----------------------------------------- */
+
+uint32_t cocosession_bindable_key(uint32_t keysym, uint32_t unicode)
+{
+    uint32_t key = keysym ? keysym : unicode;
+
+    if (!key)
+        return 0;
+    switch (key) {
+    case XKS_F10: case XKS_F11: case XKS_F12:
+    case XKS_SHIFT_L: case XKS_SHIFT_R: case XKS_CONTROL_L: case XKS_CONTROL_R:
+    case XKS_CAPS_LOCK: case XKS_META_L: case XKS_META_R: case XKS_ALT_L:
+    case XKS_ALT_R: case XKS_SUPER_L: case XKS_SUPER_R:
+        return 0;
+    case XKS_KP_ENTER:
+        return XKS_RETURN;
+    default:
+        break;
+    }
+    if (key >= 0x20 && key <= 0x7E)
+        return unshift_us(key);
+    return key;
+}
+
+int cocosession_keysym_name(uint32_t keysym, char *dst, int dstsz)
+{
+    const char *name = NULL;
+
+    if (!dst || dstsz <= 0)
+        return 0;
+    switch (keysym) {
+    case 0: name = ""; break;
+    case XKS_UP: name = "Up"; break;
+    case XKS_DOWN: name = "Down"; break;
+    case XKS_LEFT: name = "Left"; break;
+    case XKS_RIGHT: name = "Right"; break;
+    case XKS_ESCAPE: name = "Escape"; break;
+    case XKS_RETURN: name = "Return"; break;
+    case XKS_BACKSPACE: name = "Backspace"; break;
+    case XKS_TAB: name = "Tab"; break;
+    case ' ': name = "Space"; break;
+    case XKS_KP_ENTER: name = "Keypad Enter"; break;
+    case XKS_KP_MULT: name = "Keypad *"; break;
+    case XKS_KP_DIV: name = "Keypad /"; break;
+    case XKS_KP_DEC: name = "Keypad ."; break;
+    case XKS_KP_ADD: name = "Keypad +"; break;
+    case XKS_KP_SUB: name = "Keypad -"; break;
+    case XKS_DELETE: name = "Delete"; break;
+    case XKS_INSERT: name = "Insert"; break;
+    case XKS_HOME: name = "Home"; break;
+    case XKS_END: name = "End"; break;
+    case XKS_PAGE_UP: name = "Page Up"; break;
+    case XKS_PAGE_DOWN: name = "Page Down"; break;
+    default: break;
+    }
+    if (name)
+        return snprintf(dst, (size_t)dstsz, "%s", name);
+    if (keysym >= XKS_F1 && keysym <= XKS_F12)
+        return snprintf(dst, (size_t)dstsz, "F%u", (unsigned)(keysym - XKS_F1 + 1));
+    if (keysym >= XKS_KP_0 && keysym <= XKS_KP_9)
+        return snprintf(dst, (size_t)dstsz, "Keypad %u", (unsigned)(keysym - XKS_KP_0));
+    if (keysym >= 0x21 && keysym <= 0x7E) {
+        char chr = (char)keysym;
+        if (chr >= 'a' && chr <= 'z')
+            chr = (char)(chr - 32);
+        return snprintf(dst, (size_t)dstsz, "%c", chr);
+    }
+    return snprintf(dst, (size_t)dstsz, "Key 0x%X", (unsigned)keysym);
 }
