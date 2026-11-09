@@ -25,7 +25,8 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
-    "main", "nobios", "fujilog", "prefs/Machine", "prefs/ROMs", "debugger/cpu", "debugger/fujinet",
+    "main", "nobios", "fujilog", "controllers", "prefs/Machine", "prefs/Input", "prefs/ROMs",
+    "debugger/cpu", "debugger/fujinet",
 };
 
 /* The Preferences labels, as the frontends show them. */
@@ -33,6 +34,16 @@ static const char *const labels[] = {
     "Model", "Display", "Artifact colour", "Aspect ratio", "Smooth scaling", "FujiNet", "Use external FujiNet",
     "Address:port", "Sound", "Gamepads", "TV (4:3)", "Square pixels", "Integer scale", "Color BASIC",
     "Extended Color BASIC", "Super Extended Color BASIC (CoCo 3)", "Imported", "Not imported",
+};
+/* What the Input page has, as the frontends label it. */
+static const char *const input_labels[] = {
+    "Gamepads", "Analog joystick", "Automatic", "Right joystick", "Left joystick", "Reset Controls",
+    "Open Controllers",
+};
+/* The Controllers window's parts, in its topic. */
+static const char *const window_words[] = {
+    "Map", "Clear", "Defaults", "Show bindings", "Hold stick", "Keyboard", "RESET", "Stop in Debugger",
+    "Right-press", "Middle-press", "accent colour", "fixed size", "X 31  Y 31",
 };
 /* Every choice the session's tables offer, in the topic that lists them. */
 static const char *const choices[] = {
@@ -45,11 +56,13 @@ static const char *const choices[] = {
 static const char *const settings_keys[] = {
     "machine", "tv_input", "ccr", "cpu", "aspect_mode", "smooth_scaling", "enable_fujinet", "fujinet_external",
     "fujinet_external_addr", "enable_audio", "enable_gamepad", "window_width", "window_height",
+    "analog_joystick", "joystick_hold", "controllers_show_bindings", "controllers_keyboard", "pad_assign",
+    "bindings",
 };
 
 /* The app's shortcuts, as a PC and as a Mac shows them. */
 static const struct { const char *pc, *mac; } shortcuts[] = {
-    { "Ctrl+Shift+H", "⌘?" }, { "F11", "F11" }, { "F12", "F12" },
+    { "Ctrl+Shift+H", "⌘?" }, { "Ctrl+Shift+K", "⌘⇧K" }, { "F11", "F11" }, { "F12", "F12" },
 };
 
 static int misses;
@@ -150,14 +163,55 @@ check_prefs(int p)
         require(p, "preferences", "label", labels[k]);
     for (size_t k = 0; k < sizeof settings_keys / sizeof *settings_keys; k++)
         require(p, "preferences", "setting", settings_keys[k]);
+    for (size_t idx = 0; idx < sizeof input_labels / sizeof *input_labels; idx++)
+        require(p, "prefs/Input", "label", input_labels[idx]);
     for (size_t k = 0; k < sizeof choices / sizeof *choices; k++)
         require(p, "machines", "choice", choices[k]);
 }
 
-/* The shortcuts the app keeps. */
+/* The controls: the count, the default bindings (no key, the pad's rows), the
+ * keyboard's sizes, the window's parts and the shortcuts the app keeps. */
 static void
 check_controls(int p)
 {
+    char text[64];
+    int count, machine;
+
+    CHECK(COCO_TARGET_COUNT == 14, "the Help says 14 controls");
+    require(p, "changing-the-controls", "count", "14 in all");
+    require(p, "changing-the-controls", "RESET", coco_target_short_name(COCO_TARGET_SWITCH(COCO_SW_RESET)));
+    require(p, "changing-the-controls", "the debugger stop", "Stop in Debugger");
+    require(p, "the-keyboard", "no joystick keys", "no keys of their own");
+
+    /* no control has a default key; the pad's rows are the default bindings */
+    for (int target = 0; target < COCO_TARGET_COUNT; target++)
+        CHECK(cocosession_binding_get(NULL, target).keysym == 0, "no default key for %s", coco_target_name(target));
+    require_row(p, "gamepads", "Left stick", "The stick, in proportion", NULL);
+    require_row(p, "gamepads", "D-pad", "The stick, all the way", NULL);
+    require_row(p, "gamepads", "South", "Button 1", NULL);
+    require_row(p, "gamepads", "East", "Button 2", NULL);
+    for (int port = 0; port < COCOSESSION_JOYSTICK_PORTS; port++)
+        CHECK(cocosession_binding_get(NULL, COCO_TARGET_PORT(port, COCO_ACT_BUTTON1)).button == COCO_PAD_BTN_SOUTH
+              && cocosession_binding_get(NULL, COCO_TARGET_PORT(port, COCO_ACT_BUTTON2)).button == COCO_PAD_BTN_EAST
+              && cocosession_binding_get(NULL, COCO_TARGET_PORT(port, COCO_ACT_UP)).button == COCO_PAD_BTN_DPAD_UP
+              && cocosession_binding_get(NULL, COCO_TARGET_PORT(port, COCO_ACT_DOWN)).button == COCO_PAD_BTN_DPAD_DOWN
+              && cocosession_binding_get(NULL, COCO_TARGET_PORT(port, COCO_ACT_LEFT)).button == COCO_PAD_BTN_DPAD_LEFT
+              && cocosession_binding_get(NULL, COCO_TARGET_PORT(port, COCO_ACT_RIGHT)).button == COCO_PAD_BTN_DPAD_RIGHT,
+              "the gamepad rows are the default bindings");
+    CHECK(cocosession_binding_get(NULL, COCO_TARGET_SWITCH(COCO_SW_RESET)).button == COCO_PAD_BTN_NONE
+          && cocosession_binding_get(NULL, COCO_TARGET_SYSACT(COCO_SYSACT_DEBUG_STOP)).button == COCO_PAD_BTN_NONE,
+          "RESET and the debugger stop have no pad button");
+
+    /* the on-screen keyboard's key counts, per machine */
+    for (machine = 0; machine < 2; machine++) {
+        cocosession_keyboard_layout(machine == 0 ? COCOSESSION_MACHINE_COCO2 : COCOSESSION_MACHINE_COCO3,
+                                    &count, NULL, NULL);
+        snprintf(text, sizeof text, machine == 0 ? "%d keys on a CoCo 2" : "%d on a CoCo 3", count);
+        require(p, "the-on-screen-keyboard", "key count", text);
+    }
+    for (size_t idx = 0; idx < sizeof window_words / sizeof *window_words; idx++)
+        require(p, "controllers", "window part", window_words[idx]);
+
     for (size_t k = 0; k < sizeof shortcuts / sizeof *shortcuts; k++)
         require(p, "controllers-and-keys", "shortcut", platforms[p] == COCOHELP_MACOS ? shortcuts[k].mac : shortcuts[k].pc);
 }

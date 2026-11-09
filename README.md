@@ -44,13 +44,18 @@ and reports from real users on those platforms are very welcome.
 - In-process FujiNet: disk mounting from TNFS hosts or the local SD folder,
   and network config through the embedded FujiNet web UI (`FujiNet ▸
   Configuration`), plus a live console-log window.
-- Automatic gamepad support with hotplug (SDL3) driving the analog
-  joystick ports.
+- Gamepad support with hotplug (SDL3) driving the analog joystick ports. Each
+  pad is Automatic, or fixed to the right or the left joystick, and its
+  joystick is remembered between runs.
+- A skinned **Controllers** window (Ctrl+Shift+K): the two Tandy joysticks,
+  draggable and clickable, held controls lit in the accent colour, and, if you
+  want it, the CoCo's own keyboard.
 - Import disk images into the FujiNet SD folder; Import BIOS… for
   the Tandy firmware this project does not (and cannot) ship — see
   "CoCo system ROMs" below.
 - Settings/Preferences windows (GNOME, KDE, macOS ⌘,, Windows) for aspect
-  ratio, smooth scaling, FujiNet enable and gamepad enable.
+  ratio, smooth scaling, FujiNet enable, and an Input page (Windows: Machine ▸
+  Input…) for the gamepads.
 
 ### Built-in Help
 
@@ -59,6 +64,36 @@ Help, and the Help buttons in Preferences, the debugger and the console log open
 the topic for what they show. The text is [data/help/help.md](data/help/help.md),
 which GitHub shows as it is; the build embeds it and every frontend lays it out
 natively.
+
+### Controllers (Ctrl+Shift+K, ⌘⇧K on a Mac)
+
+The Controllers window floats at a fixed size and is hidden at startup. It
+draws the two joysticks as the Tandy ones look (an off-white base, a round
+gate, a black stick, red fire buttons, two on a CoCo 3) with RESET between
+them, and an `X 31  Y 31` readout of what a program reads. The case is
+silver-grey on a CoCo 3 and cream on a CoCo 2. Drag the gate to move the stick
+in proportion, press a red button to hold it (right-press holds button 1,
+middle-press button 2), and press RESET to reset. **Hold stick** keeps the
+stick where you dropped it, as the originals do. **Keyboard** adds the CoCo's
+keyboard (53 keys, 57 on a CoCo 3) to the window. Held controls light up
+whoever holds them: the keyboard, a gamepad or the mouse.
+
+Every key of the host keyboard is a CoCo key, so the joysticks have **no
+default keys**. **Map** gives any of the 14 controls (both joysticks'
+directions and buttons, RESET and Stop in Debugger) a key or a gamepad
+button; a key given that way no longer types on the CoCo. Port 0 is the right
+joystick and port 1 the left.
+
+| Gamepad | Does |
+|---|---|
+| Left stick | the stick, in proportion (Analog joystick off: an eight-way switch) |
+| D-pad | the stick, all the way |
+| South (A) / East (B) | button 1 / button 2 (CoCo 3) |
+
+The first pad drives the right joystick and the second the left. Choose
+*Automatic*, *Right joystick* or *Left joystick* for each pad in the Controllers
+window or the Input settings; the choice is remembered between runs. **Reset
+Controls** puts every key and button back.
 
 ### Developer debugger (F12)
 

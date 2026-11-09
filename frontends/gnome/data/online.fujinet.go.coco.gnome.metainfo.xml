@@ -9,8 +9,10 @@
     <p>
       A Tandy Color Computer with FujiNet built in: mount disk images from
       TNFS servers or the local SD folder, configure everything through the
-      embedded FujiNet web UI, and play with automatic gamepad support driving
-      the analog joystick ports.
+      embedded FujiNet web UI, and play with gamepads driving the analog
+      joystick ports. A Controllers window draws the two Tandy joysticks and the
+      keyboard, clickable and remappable, and each gamepad's joystick is
+      remembered between runs.
     </p>
     <p>
       Emulation is provided by XRoar, with FujiNet attached over the Becker
