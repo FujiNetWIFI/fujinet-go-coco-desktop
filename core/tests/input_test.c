@@ -11,6 +11,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "coco_host.h"
 #include "cocosession.h"
