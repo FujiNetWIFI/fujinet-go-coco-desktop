@@ -1146,7 +1146,7 @@ static int following(debugger *d)
  * of the last stop stay (the PC bar is dropped by paint_disasm). */
 static void refresh_disasm(debugger *d)
 {
-    int pc_line = -1, count, idx;
+    int pc_line = -1, count;
     const int rows = disasm_rows(d);
 
     if (!cocodebug_is_paused(d->dbg)) {
@@ -1163,20 +1163,6 @@ static void refresh_disasm(debugger *d)
     count = cocodebug_disassemble_ex(d->dbg, (uint16_t)d->disasm_top, d->lines, rows, &pc_line);
     d->line_count = count < 0 ? 0 : count;
     d->pc_line = pc_line;
-    /* the engine's bytes text stops after the first byte (it NUL-terminates each
-     * "%02X" before the next is written): spell the bytes out from memory */
-    for (idx = 0; idx < d->line_count; idx++) {
-        uint8_t raw[8];
-        char spelled[32];
-        const int len = d->lines[idx].length;
-        int byte;
-        if (len < 1 || len > 8 || cocodebug_mem_read(d->dbg, COCODEBUG_SPACE_CPU, d->lines[idx].address, raw, len) != len)
-            continue;
-        spelled[0] = '\0';
-        for (byte = 0; byte < len && (size_t)(byte * 3 + 3) < sizeof spelled; byte++)
-            snprintf(spelled + strlen(spelled), sizeof spelled - strlen(spelled), "%s%02X", byte ? " " : "", raw[byte]);
-        snprintf(d->lines[idx].bytes, sizeof d->lines[idx].bytes, "%s", spelled);
-    }
     InvalidateRect(d->disasm, NULL, FALSE);
 }
 
