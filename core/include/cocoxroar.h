@@ -4,7 +4,7 @@
  * XRoar 1.11 is staged and patched at build time (cmake/StageXRoar.cmake,
  * tools/xroar/patch-staged-tree.py). The patch adds everything declared in
  * the staged header "machine_debug.h" (source: tools/xroar/support/
- * machine_debug.h; the C bodies are tools/xroar/support/fragments/*.inc).
+ * machine_debug.h; the C bodies are the .inc files in tools/xroar/support/fragments).
  * Including this header brings it in, with the XRoar headers it needs, and
  * adds one inline helper (the partial frame). This file is the contract.
  *
