@@ -39,8 +39,8 @@
       <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-coco-desktop/v0.4.1/data/screenshots/1_fujinet_config.png</image>
     </screenshot>
     <screenshot>
-      <caption>The built-in 6809 debugger</caption>
-      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-coco-desktop/v0.4.1/data/screenshots/2_debugger.png</image>
+      <caption>The built-in debugger: C source stepping with locals, and what drew each part of the screen</caption>
+      <image>https://raw.githubusercontent.com/FujiNetWIFI/fujinet-go-coco-desktop/v0.8.0/data/screenshots/2_debugger.png</image>
     </screenshot>
     <screenshot>
       <caption>Preferences: machine, video, window and FujiNet options</caption>
@@ -52,6 +52,16 @@
   </developer>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.8.0" date="2026-11-15">
+      <description>
+        <p>
+          New debugger, the same as the other FujiNet Go desktops: thirteen tabs (Console, Disassembly, C Source, Memory, Breakpoints, Watches, Cart &amp; I/O, Trace, History, Video, Sound, Symbols, FujiNet) with the 6809's or 6309's registers under all of them; any tab can pop out into its own window. Breakpoints can watch reads and writes, can be switched off, count their hits, and say what a write wrote and what it replaced. Memory shows the whole 64K and, on a CoCo 3, the physical RAM, and looking at it never uses up a byte of the FujiNet's. Trace and History record every instruction. The Video tab shows what each line of the screen was drawn from and with, and can stop on a write to it. The C Source tab keeps CMOC source-level stepping.
+        </p>
+        <p>
+          Fixed: the debugger stopped working after the machine was restarted or reset, and Step Out did not stop from inside a C function.
+        </p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-11-08">
       <description>
         <p>
