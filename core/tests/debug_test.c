@@ -826,6 +826,74 @@ static void check_prompt(cocodebug *d)
     cocodebug_command(d, "trace off", out, sizeof out);
 }
 
+/* Step Out by depth: a routine with PSHS U,X, a local, a nested BSR and a
+ * PULS ...,PC. */
+static void check_step_out(cocodebug *d)
+{
+    static const uint8_t prog[] = { 0xBD, 0x07, 0x10, 0x20, 0xFE };
+    static const uint8_t routine[] = {
+        0x34, 0x50, 0x32, 0x7E, 0x8D, 0x0A, 0x86, 0x55, 0x32, 0x62, 0x35, 0xD0
+    };
+    static const uint8_t nested[] = { 0x86, 0x11, 0x39 };
+    static const uint8_t forever[] = { 0x20, 0xFE };
+    cocodebug_regs r, start;
+    cocodebug_stop stop;
+    uint64_t serial;
+    int step;
+
+    pause_now(d);
+    cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, 0x0700, prog, sizeof prog);
+    cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, 0x0710, routine, sizeof routine);
+    cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, 0x0720, nested, sizeof nested);
+    cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, 0x0740, forever, sizeof forever);
+    cocodebug_flag_set(d, COCODEBUG_CC_I | COCODEBUG_CC_F, 1);
+    cocodebug_regs_set(d, COCODEBUG_REG_PC, 0x0700);
+    cocodebug_regs_get(d, &start);
+
+    for (step = 0; step < 3; step++) {
+        serial = cocodebug_stop_serial(d);
+        cocodebug_step(d);
+        wait_stop_serial(d, serial);
+    }
+    cocodebug_regs_get(d, &r);
+    ok("stepped into the middle of the routine (before the nested call)", r.pc == 0x0714 && r.s < start.s);
+    serial = cocodebug_stop_serial(d);
+    cocodebug_step_out(d);
+    ok("Step Out stops", wait_stop_serial(d, serial));
+    cocodebug_stop_snapshot(d, &stop);
+    ok("...after the nested call returned, at the instruction after the JSR",
+       stop.pc == 0x0703 && !strcmp(stop.reason, "returned at $0703"));
+    cocodebug_regs_get(d, &r);
+    ok("...with S back where it was", r.s == start.s);
+
+    /* from the first instruction of the routine */
+    cocodebug_regs_set(d, COCODEBUG_REG_PC, 0x0700);
+    serial = cocodebug_stop_serial(d);
+    cocodebug_step(d);
+    wait_stop_serial(d, serial);
+    cocodebug_regs_get(d, &r);
+    ok("at the routine's first instruction", r.pc == 0x0710);
+    serial = cocodebug_stop_serial(d);
+    cocodebug_step_out(d);
+    ok("Step Out from the first instruction stops", wait_stop_serial(d, serial));
+    cocodebug_regs_get(d, &r);
+    ok("...after the JSR", r.pc == 0x0703 && r.s == start.s);
+
+    /* a routine that never returns stays running, and Pause works */
+    cocodebug_regs_set(d, COCODEBUG_REG_PC, 0x0740);
+    cocodebug_step_out(d);
+    nap_ms(150);
+    ok("Step Out in a loop that never returns keeps running", !cocodebug_is_paused(d));
+    pause_now(d);
+    ok("...and Pause stops it", cocodebug_is_paused(d));
+    serial = cocodebug_stop_serial(d);
+    cocodebug_resume(d);
+    nap_ms(50);
+    ok("...with no step-out left armed", !cocodebug_is_paused(d));
+    pause_now(d);
+    (void)serial;
+}
+
 /* Bug 1: a session that stops and starts again leaves the engine alive. */
 static void check_restart(cocosession *s, cocodebug *d, int machine)
 {
@@ -903,6 +971,7 @@ int main(int argc, char **argv)
     check_symbols(d);
     check_io_and_sound(d);
     check_prompt(d);
+    check_step_out(d);
 
     /* --- releasing lets it run again ------------------------------------- */
     {

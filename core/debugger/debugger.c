@@ -86,6 +86,11 @@ struct cocodebug {
      * alongside step_remaining/transient_bp above, and mutually exclusive
      * with them -- entering one clears the others. */
     volatile int src_step;
+    /* Step out: run until a return-class instruction has executed and S is
+     * above out_s (S when the command was given). */
+    volatile int out_active;
+    int      out_pending;      /* the instruction just run was return-class */
+    uint16_t out_s;
     int      src_step_file, src_step_line;
     uint16_t src_step_s;       /* S when the step began, for step-over's
                                  * call-depth check. */
@@ -180,6 +185,7 @@ static cocodebug_video_text_fn g_video_text;
 
 static void instruction_hook(void *sptr);
 static void sync_taps(struct cocodebug *d);
+static uint8_t dasm_read(uint16_t addr, void *user);
 
 static void bump(struct cocodebug *d)
 {
@@ -591,13 +597,14 @@ static void instruction_hook(void *sptr)
         d->pause_request = 0;
         d->step_remaining = 0;
         d->src_step = 0;
+        d->out_active = 0;
         d->transient_bp = -1;
         snprintf(text, sizeof(text), "%s", d->break_reason);
         park_locked(d, cpu, pc, text, d->break_has_pc);
         pthread_mutex_unlock(&d->mtx);
         goto chain;
     }
-    if (!(d->pause_request || d->step_remaining > 0 || d->src_step ||
+    if (!(d->pause_request || d->step_remaining > 0 || d->src_step || d->out_active ||
           d->transient_bp >= 0 || d->map_exec[pc]))
         goto chain;
 
@@ -616,6 +623,24 @@ static void instruction_hook(void *sptr)
             reason = "step";
         }
     }
+    if (d->out_active) {
+        if (d->out_pending) {
+            d->out_pending = 0;
+            if (cpu->reg_s > d->out_s) {
+                d->out_active = 0;
+                stop = 1;
+                reason = "returned";
+            }
+        }
+        if (d->out_active) {
+            coco_dasm_line next;
+            coco_dasm_one_cpu(pc, dasm_read, NULL,
+                              d->hooked_6309 ? COCO_DASM_CPU_HD6309 : COCO_DASM_CPU_MC6809,
+                              &next);
+            d->out_pending = next.flow == COCO_FLOW_RETURN || next.flow == COCO_FLOW_PULL_PC ||
+                             next.flow == COCO_FLOW_TRANSFER_PC;
+        }
+    }
     if (d->src_step && cocosrcinfo_is_stmt(d->srcinfo, pc)) {
         int f, l;
         cocosrcinfo_line_at(d->srcinfo, pc, &f, &l);
@@ -628,6 +653,7 @@ static void instruction_hook(void *sptr)
         if ((f != d->src_step_file || l != d->src_step_line) &&
             (d->src_step == 1 || cpu->reg_s >= d->src_step_s)) {
             d->src_step = 0;
+            d->out_active = 0;
             stop = 1;
             reason = "line step";
         }
@@ -638,6 +664,7 @@ static void instruction_hook(void *sptr)
          * info that never returns to a mapped address on its own. Stop
          * where we are rather than hang. */
         d->src_step = 0;
+        d->out_active = 0;
         stop = 1;
         reason = "line step gave up";
     }
@@ -647,6 +674,7 @@ static void instruction_hook(void *sptr)
         d->transient_bp = -1;
         d->step_remaining = 0;
         d->src_step = 0;
+        d->out_active = 0;
         stop = 1;
         reason = "returned";
     }
@@ -664,6 +692,7 @@ static void instruction_hook(void *sptr)
                 bp->hits++;
                 d->step_remaining = 0;
                 d->src_step = 0;
+                d->out_active = 0;
                 d->transient_bp = -1;
                 stop = 1;
                 append_pc = 0;
@@ -940,6 +969,7 @@ static void session_begin(cocodebug *d)
     d->step_remaining = 0;
     d->transient_bp = -1;
     d->src_step = 0;
+    d->out_active = 0;
     atomic_store(&d->break_pending, 0);
     d->hooked_cpu = NULL;
     memset(&d->prev_hook, 0, sizeof(d->prev_hook));
@@ -1068,6 +1098,7 @@ void cocodebug_pause(cocodebug *d)
         d->pause_request = 1;
         d->step_remaining = 0;
         d->src_step = 0;
+        d->out_active = 0;
     }
     pthread_mutex_unlock(&d->mtx);
 }
@@ -1081,6 +1112,7 @@ void cocodebug_resume(cocodebug *d)
     d->step_remaining = 0;
     d->transient_bp = -1;
     d->src_step = 0;
+    d->out_active = 0;
     d->paused = 0;
     pthread_cond_broadcast(&d->cv);
     pthread_mutex_unlock(&d->mtx);
@@ -1108,6 +1140,7 @@ void cocodebug_step(cocodebug *d)
     d->step_remaining = 1;
     d->transient_bp = -1;
     d->src_step = 0;
+    d->out_active = 0;
     d->paused = 0;
     pthread_cond_broadcast(&d->cv);
     pthread_mutex_unlock(&d->mtx);
@@ -1121,6 +1154,7 @@ static void arm_src_step(cocodebug *d, int kind, int file, int line,
 {
     pthread_mutex_lock(&d->mtx);
     d->src_step = kind;
+    d->out_active = 0;
     d->src_step_file = file;
     d->src_step_line = line;
     d->src_step_s = s_at_start;
@@ -1658,6 +1692,7 @@ void cocodebug_step_over(cocodebug *d)
     }
 
     pthread_mutex_lock(&d->mtx);
+    d->out_active = 0;
     /* Break where the call will return to. This is the whole reason the
      * disassembler reports a length. */
     d->transient_bp = (uint16_t)(d->regs.pc + line.len);
@@ -1669,8 +1704,6 @@ void cocodebug_step_over(cocodebug *d)
 
 void cocodebug_step_out(cocodebug *d)
 {
-    uint8_t ret[2];
-
     if (!d)
         return;
     if (!cocodebug_is_paused(d)) {
@@ -1678,17 +1711,20 @@ void cocodebug_step_out(cocodebug *d)
         return;
     }
 
-    /* The 6809 pushes the return address last, so it is at the top of the
-     * stack -- as long as the routine has not pushed anything since entry.
-     * Every debugger's step-out is approximate in this way. */
-    if (cocodebug_read(d, d->regs.s, ret, 2) != 2) {
-        cocodebug_step(d);
-        return;
-    }
-
+    /* Depth, not a guess at the return address: run until a RETURN-class
+     * instruction has executed and S is above where it is now. A nested
+     * call's RTS comes back to this S or lower, so it does not stop us; a
+     * routine that pushed registers, locals or a frame pointer is no
+     * different from one that did not. If it never returns the machine just
+     * keeps running and Pause still works. */
     pthread_mutex_lock(&d->mtx);
-    d->transient_bp = (uint16_t)((ret[0] << 8) | ret[1]);
+    d->out_s = d->regs.s;
+    d->out_pending = 0;
+    d->out_active = 1;
+    d->transient_bp = -1;
     d->step_remaining = 0;
+    d->src_step = 0;
+    d->out_active = 1;
     d->paused = 0;
     pthread_cond_broadcast(&d->cv);
     pthread_mutex_unlock(&d->mtx);
@@ -1702,6 +1738,7 @@ void cocodebug_run_to(cocodebug *d, uint16_t addr)
     d->transient_bp = addr;
     d->step_remaining = 0;
     d->src_step = 0;
+    d->out_active = 0;
     d->paused = 0;
     pthread_cond_broadcast(&d->cv);
     pthread_mutex_unlock(&d->mtx);
@@ -2305,6 +2342,7 @@ int cocodebug_source_load(cocodebug *d, const char *lst_path)
     pthread_mutex_lock(&d->mtx);
     n = cocosrcinfo_load(d->srcinfo, lst_path, d->symtab);
     d->src_step = 0;
+    d->out_active = 0;
     pthread_mutex_unlock(&d->mtx);
     return n;
 }
@@ -2316,6 +2354,7 @@ void cocodebug_source_clear(cocodebug *d)
     pthread_mutex_lock(&d->mtx);
     cocosrcinfo_clear(d->srcinfo);
     d->src_step = 0;
+    d->out_active = 0;
     pthread_mutex_unlock(&d->mtx);
 }
 
