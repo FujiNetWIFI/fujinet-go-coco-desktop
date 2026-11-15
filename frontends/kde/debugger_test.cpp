@@ -21,6 +21,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <cstring>
+
 #include <QFile>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -87,6 +89,13 @@ const QColor kInk(0x14, 0x21, 0x0A);
 /* With the machine stopped: the program in place, PC at its INCA. */
 void loadProgram(cocodebug *d)
 {
+    /* A run of NOPs before and after the program: the disassembly steps back
+     * from the PC by guessing, and without system ROMs the RAM holds noise
+     * whose instruction boundaries would put the guess out of step. */
+    uint8_t nops[0x100];
+    memset(nops, 0x12, sizeof nops);
+    cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, kStart - 0x80, nops, 0x80);
+    cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, kStart + (int)sizeof kProg, nops, 0x80);
     cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, kStart, kProg, (int)sizeof kProg);
     cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, kBeepAt, kBeep, (int)sizeof kBeep);
     cocodebug_mem_write(d, COCODEBUG_SPACE_CPU, kAddAt, kAddMain, (int)sizeof kAddMain);
