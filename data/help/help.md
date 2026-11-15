@@ -452,8 +452,11 @@ Each setting above names its key. The others are `cpu` (the processor),
 
 # Debugger
 
-The Debugger (<kbd>F12</kbd>) stops the machine and shows what it is doing. It has
-two tabs, and closing it lets the machine go on as it was.
+The Debugger (<kbd>F12</kbd>) stops the machine and shows what it is doing. It
+has thirteen tabs, and closing it lets the machine go on as it was. The
+6809's (or 6309's) registers sit in a strip under the tabs: PC, A, B, DP, X, Y,
+U, S and the condition codes, and on a 6309 also E, F, W, V and MD. Edit a value
+while stopped and press <kbd>Enter</kbd>.
 
 | Button | Does |
 |---|---|
@@ -464,19 +467,66 @@ two tabs, and closing it lets the machine go on as it was.
 | Step Line (<kbd>F6</kbd>) | On to a different C source line |
 | Step Over Line (<kbd>Shift+F6</kbd>) | The same, but a call on the line runs to completion |
 | Clear Breakpoints | Removes every breakpoint |
+| Break at | A symbol name or hex address, then <kbd>Enter</kbd> |
 | Load Symbols | Reads an LWASM `--symbol-dump` file |
 | Clear Symbols | Drops loaded symbols, keeping the built-ins |
 | Load C Source | Reads CMOC `.lst` listings |
 | Clear C Source | Drops the loaded C source |
+| Pop Out | Moves the tab that shows into a window of its own; **Dock** in that window puts it back |
 | Help | Opens the topic of the tab that shows |
 
-<!-- context: debugger/cpu -->
-## CPU
+Beside them, the Debugger says why the machine stopped: a step, a breakpoint
+and its address, or a read or write with the value and, for a write, what it
+replaced. Every stop brings the views back to where the machine is, even if you
+had scrolled away.
 
-The 6809 or 6309 disassembled, registers, a memory view (type an address after
-**Address:** and press **Go**) and a decoded video pane. Click a line to toggle
-its breakpoint. The built-in symbols are the Color BASIC ROM's entry points
-(`POLCAT`, `CHROUT`, `CSRDON` and so on).
+<!-- context: debugger/console -->
+## Console
+
+The Console takes commands, with completion on <kbd>Tab</kbd>. Numbers are `$0600`,
+`0x600`, `600h` or `1536`. `help` lists the commands.
+
+| Command | Does |
+|---|---|
+| `step`, `over`, `out` | One instruction; over a call; on until the routine returns |
+| `line`, `overline` | On to a different C source line, or over a call on it |
+| `run`, `stop` | Run on, or stop |
+| `runto` | Runs to an address |
+| `break` | An execute breakpoint, `break addr [cond]` |
+| `bpr`, `bpw`, `bpa` | Memory reads, writes, or both: `bpw addr[-end] [cond]` |
+| `delete`, `enable`, `disable` | A breakpoint by id |
+| `clear`, `breaks`, `hits` | Clear all, list them, or zero the hit counts |
+| `print` | Evaluates an expression |
+| `regs`, `set` | The registers; `set reg expr`, flags too |
+| `mem`, `poke` | Memory in a space: `mem [phys] addr [len]` |
+| `disasm` | Disassembles |
+| `trace` | The instruction trace |
+| `watch`, `unwatch` | The watch list: `watch score`, `unwatch 0` |
+| `find` | Searches memory for bytes (`find 8E 04`) or text (`find text HELLO`) |
+| `symbols`, `label`, `labels` | List symbols; name an address; load a symbol file |
+| `source`, `locals` | The C source; the locals of the current function |
+| `map`, `io`, `cart`, `sound` | The memory map, the PIAs, SAM and GIME, the cartridge, the sound |
+| `video` | The Video tab as text: `video lines`, `video timing` |
+
+The spaces are the CPU's 64K and, on a CoCo 3, `phys`, the whole physical RAM.
+An expression has the registers (`a b d dp x y u s pc cc`, and on a 6309 `e f w
+v md`), the flags (`cf vf zf nf if hf ff ef`), the byte at `[addr]`, the word at
+`{addr}`, labels, and `vpos`, `hpos`, `frame` and `cycles`. In a breakpoint
+condition `value` and `addr` are the access and `old` is what was there before:
+`value != old` stops only when a write changes something. The operators are C's.
+
+<!-- context: debugger/disassembly -->
+## Disassembly
+
+The 6809 or 6309 disassembled at the PC, with the opcode bytes and labels. The
+current instruction is in the app's accent colour and a breakpoint is a red dot
+in the margin (a grey hollow one when it is disabled); click a line to toggle
+its breakpoint. **Follow PC** keeps the current line in view. The built-in
+symbols are the Color BASIC ROM's entry points (`POLCAT`, `CHROUT`, `CSRDON`
+and so on).
+
+<!-- context: debugger/csource -->
+## C Source
 
 With **Load C Source** and a program built by [CMOC](http://sarrazip.com/dev/cmoc.html)
 with `cmoc -i` (which keeps the listing and linker map), a source pane marks the
@@ -484,6 +534,109 @@ current line, **Step Line** and **Step Over Line** go by C statement, a click on
 line sets a breakpoint, and a Locals pane shows parameters and locals by name and
 value. For a program with several `.c` files, pick all their `.lst` files at once;
 loading adds each module rather than replacing what was loaded.
+
+<!-- context: debugger/memory -->
+## Memory
+
+The 64K the CPU sees, 16 bytes to a row, each row labelled with what answers
+there (RAM, the BASIC ROMs, the cartridge, the PIAs, the SAM, the GIME).
+Reading never touches a device: looking at the FujiNet's registers does not
+use up a byte. On a CoCo 3 the chooser also offers **PHYS**, the physical RAM,
+whatever the MMU maps where. **Go To** takes an address, a label, an expression
+or a range (`$0400-$05FF`) and highlights what it found. **Poke** writes bytes.
+The search bar finds hex bytes or text (not case-sensitive) with **Find Next**
+and **Find Previous**, wrapping once; the machine has to be stopped.
+
+<!-- context: debugger/breakpoints -->
+## Breakpoints
+
+Every breakpoint. **Add** one with a kind, an address or range and, if you like,
+a condition:
+
+- **Execute** stops before an instruction runs.
+- **Read**, **Write** and **Access** (both) stop after the instruction that
+  touched memory, and the line at the top says what it did, for instance
+  `wrote $0600 = $FC (was $FB) at $0707`. On a CoCo 3 they can watch a physical
+  address instead.
+
+The box beside each entry turns it off, and the list shows how many times it
+fired. **Clear Hits** zeroes the counts and **Clear Breakpoints** removes them
+all.
+
+<!-- context: debugger/watches -->
+## Watches
+
+Things to keep an eye on: type an address, a symbol, an expression or a range
+and press <kbd>Enter</kbd>. Each shows its value while the machine is stopped
+(`-` while it runs, `?` if it means nothing yet, which a later **Load Symbols**
+may fix). **Show in Memory** jumps to it in the Memory tab, **Break on Change**
+adds a Write breakpoint that fires when its value changes, and **Remove** drops
+it.
+
+<!-- context: debugger/cart -->
+## Cart and I/O
+
+The cartridge (the Becker ROM and its state), the memory map as the machine
+sees it now, and the chips: the two PIAs with their data and control registers
+and the lines, the SAM's mode and display address, on a CoCo 3 the GIME's
+registers, palette and MMU, and the joysticks.
+
+<!-- context: debugger/trace -->
+## Trace
+
+Every instruction the CPU runs, live. **Record** turns it on (it slows the
+machine a little, so it starts off), **Clear** empties it, **Branches only**
+shows just the jumps, branches, calls and returns, and **In range** only a
+range of addresses. Trace and History share one recording.
+
+<!-- context: debugger/history -->
+## History
+
+The same recording, read at a stop: the lead-up to a breakpoint or a pause,
+newest at the bottom, with the registers, the scan line and the position on it
+at each instruction. Turn **Record** on before you run to the place you want to
+look at.
+
+<!-- context: debugger/video -->
+## Video
+
+The screen, with the picture on the left and five sections on the right. A
+program changes the video mode, the colour set or the palette while the screen
+is being drawn, so the machine records what each line was drawn with and the
+views use it.
+
+| View | Shows |
+|---|---|
+| Display | The last frame, as the screen showed it |
+| Decoded | The memory the video chip read, drawn through each line's own mode and palette |
+| Beam | Stopped only: this frame as far as the beam has drawn it, the last one dimmed below |
+| Values | The raw colour or palette indexes |
+
+**Zoom** goes from 1 to 16 times, or **Fit**. **Overlays** switch on the beam,
+the cell grid, where each line starts reading memory, and the lines where the
+mode or palette changes.
+
+Point at a pixel to see it in **Pixel**: its line and mode, the address it was
+read from and the byte. Click to pin it, click again to let go. Double-click it,
+or press **Break on writes**, to stop the machine when anything writes that byte.
+
+**Registers** shows the SAM's bits, the PIA's video control lines and, on a
+CoCo 3, the GIME's registers; one that changed in the last few refreshes is
+highlighted. **Colours** shows the colour set or the 64-entry palette and how
+many pixels use each. **Lines** lists every line's mode, address and what
+changed. **Timing** shows the beam.
+
+<!-- context: debugger/sound -->
+## Sound
+
+The 6-bit DAC, the single-bit sound, the cassette motor and which source the
+analog multiplexer sends to the speaker, with the recent writes to the DAC.
+
+<!-- context: debugger/symbols -->
+## Symbols
+
+Every known symbol, the built-ins and the ones you loaded. **Filter** narrows
+the list, and activating a row goes to that address in the Disassembly.
 
 <!-- context: debugger/fujinet -->
 ## FujiNet packets

@@ -26,7 +26,10 @@ static const char *const platform_names[] = { "GNOME", "KDE", "Windows", "macOS"
 /* What the frontends' Help buttons and menus open. */
 static const char *const contexts[] = {
     "main", "nobios", "fujilog", "controllers", "prefs/Machine", "prefs/Input", "prefs/ROMs",
-    "debugger/cpu", "debugger/fujinet",
+    "debugger/console", "debugger/disassembly", "debugger/csource", "debugger/memory",
+    "debugger/breakpoints", "debugger/watches", "debugger/cart", "debugger/trace",
+    "debugger/history", "debugger/video", "debugger/sound", "debugger/symbols",
+    "debugger/fujinet",
 };
 
 /* The Preferences labels, as the frontends show them. */
@@ -237,9 +240,14 @@ check_debugger(int p)
 {
     static const char *const words[] = { "Pause", "Step Over", "Step Out", "Step Line", "Step Over Line",
                                          "Clear Breakpoints", "Load Symbols", "Clear Symbols", "Load C Source",
-                                         "Clear C Source", "two tabs", "Hide READY probes", "CMOC" };
+                                         "Clear C Source", "thirteen tabs", "Hide READY probes", "CMOC", "Pop Out", "Break at" };
     for (size_t k = 0; k < sizeof words / sizeof *words; k++)
         require(p, "debugger", "button", words[k]);
+    /* the Video tab's words */
+    static const char *const video[] = { "Display", "Decoded", "Beam", "Values", "Zoom", "Fit", "Overlays",
+                                         "Pixel", "Registers", "Colours", "Lines", "Timing", "Break on writes" };
+    for (size_t k = 0; k < sizeof video / sizeof *video; k++)
+        require(p, "debugger/video", "word", video[k]);
 }
 
 int
@@ -268,7 +276,7 @@ main(void)
     CHECK(cocohelp_search(COCOHELP_GNOME, "disk", hits, 16) > 0, "search disk");
     CHECK(cocohelp_search(COCOHELP_GNOME, "zzqxj", hits, 16) == 0, "search nonsense");
     int n = cocohelp_search(COCOHELP_KDE, "CMOC", hits, 16);
-    CHECK(n > 0 && cocohelp_find("debugger/cpu", &t, &b) == 0
+    CHECK(n > 0 && cocohelp_find("debugger/csource", &t, &b) == 0
           && hits[0].topic == t && hits[0].block == b, "CMOC is the first hit");
     for (int i = 1; i < n; i++)
         CHECK(hits[i - 1].score >= hits[i].score, "hits best first");
