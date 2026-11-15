@@ -44,9 +44,14 @@ int main(int argc, char *argv[])
         fprintf(stderr, "session start: %s\n",
                 cocosession_last_error(session));
 
-    MainWindow win(session);
-    win.show();
-    const int rc = app.exec();
+    int rc;
+    /* The windows go before the session does: the debugger releases its
+     * engine as it is destroyed. */
+    {
+        MainWindow win(session);
+        win.show();
+        rc = app.exec();
+    }
 
     cocosession_free(session);
     return rc;
