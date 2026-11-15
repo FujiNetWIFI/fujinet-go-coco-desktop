@@ -22,6 +22,7 @@ add_executable(fujinet-go-coco-macos MACOSX_BUNDLE
   controllers/ControllersWindow.m
   help/HelpWindow.m
   debugger/DebuggerWindow.m
+  debugger/VideoTab.m
   ${MACOS_ICON}
 )
 set_target_properties(fujinet-go-coco-macos PROPERTIES
