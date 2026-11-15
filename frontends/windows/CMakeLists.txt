@@ -21,6 +21,7 @@ add_executable(fujinet-go-coco-windows WIN32
   input_prefs.c
   controllers/controllers_window.c
   debugger/dbg_window.c
+  debugger/dbg_video.c
   help/help_window.c
   resource.rc
 )
