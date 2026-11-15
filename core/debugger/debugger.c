@@ -1568,9 +1568,12 @@ int cocodebug_disassemble_ex(cocodebug *d, uint16_t addr, cocodebug_line *out,
         line->is_pc = have_regs && regs.pc == addr;
         if (line->is_pc && pc_line)
             *pc_line = count;
-        for (byte = 0; byte < raw.len && byte < COCO_DASM_MAX_BYTES; byte++)
-            snprintf(line->bytes + byte * 3, sizeof(line->bytes) - (size_t)byte * 3,
-                     "%s%02X", byte ? " " : "", raw.bytes[byte]);
+        {
+            size_t used = 0;
+            for (byte = 0; byte < raw.len && byte < COCO_DASM_MAX_BYTES && used < sizeof(line->bytes); byte++)
+                used += (size_t)snprintf(line->bytes + used, sizeof(line->bytes) - used,
+                                         "%s%02X", byte ? " " : "", raw.bytes[byte]);
+        }
         snprintf(line->disasm, sizeof(line->disasm), "%s", raw.text);
         line->flags = raw.flags;
         line->flow = raw.flow;

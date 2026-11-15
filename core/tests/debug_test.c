@@ -432,6 +432,8 @@ static void check_breakpoint_kinds(cocodebug *d)
     cocodebug_breakpoint_enable(d, id, 1);
     cocodebug_disassemble_ex(d, 0x0704, line, 1, NULL);
     ok("an enabled one is the red dot", line[0].has_breakpoint && !line[0].bp_disabled);
+    ok("the disassembly lists every opcode byte (EC A4, not EC)",
+       line[0].length > 0 && (int)strlen(line[0].bytes) == line[0].length * 3 - 1);
     serial = cocodebug_stop_serial(d);
     cocodebug_resume(d);
     ok("...and stops the machine", wait_stop_serial(d, serial));
