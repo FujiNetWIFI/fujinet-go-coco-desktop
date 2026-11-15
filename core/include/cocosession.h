@@ -321,6 +321,10 @@ typedef enum { COCO_SYSACT_DEBUG_STOP = 0, COCO_SYSACT_COUNT } coco_sysaction;
 
 /* The app's accent colour (the icon's green), for held controls. */
 #define COCOSESSION_ACCENT_RGB 0x8BC34A
+/* The darker accent (pressed/selected fills) and the ink that reads on the
+ * accent fills. */
+#define COCOSESSION_ACCENT_DARK_RGB 0x5E8A2C
+#define COCOSESSION_ACCENT_INK_RGB 0x14210A
 
 /* "Right joystick: Left", "RESET", "Debugger Stop"; the short form drops the
  * joystick: "Left", "Button 1". Static strings (the long form is rewritten by

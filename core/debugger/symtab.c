@@ -208,3 +208,22 @@ int cocosymtab_lookup_name(const cocosymtab *t, const char *name,
     }
     return 0;
 }
+
+int cocosymtab_count(const cocosymtab *t)
+{
+    return t ? t->count : 0;
+}
+
+int cocosymtab_get(const cocosymtab *t, int index, uint16_t *addr, char *name,
+                   int namesz, int *builtin)
+{
+    if (!t || index < 0 || index >= t->count)
+        return 0;
+    if (addr)
+        *addr = t->entries[index].addr;
+    if (name && namesz > 0)
+        snprintf(name, (size_t)namesz, "%s", t->entries[index].name);
+    if (builtin)
+        *builtin = index < t->builtin_count;
+    return 1;
+}

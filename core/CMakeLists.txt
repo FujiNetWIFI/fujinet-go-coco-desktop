@@ -272,6 +272,19 @@ add_library(cocosession STATIC
   "${COCO_ROMS_C}"
 )
 
+# Debugger: expressions, the prompt, watches and search parsing.
+target_sources(cocosession PRIVATE
+  debugger/expr.c
+  debugger/prompt.c
+  debugger/memtools.c
+)
+
+# Video tab: per-line capture from the video taps, and its controller.
+target_sources(cocosession PRIVATE
+  src/vidcap.c
+  debugger/vidtab.c
+)
+
 target_include_directories(cocosession
   PUBLIC include xroar
   PRIVATE src debugger "${CMAKE_CURRENT_BINARY_DIR}"
@@ -357,7 +370,13 @@ target_include_directories(boot_smoke PRIVATE src)
 
 add_executable(debug_test tests/debug_test.c)
 target_link_libraries(debug_test cocosession)
-target_include_directories(debug_test PRIVATE src)
+target_include_directories(debug_test PRIVATE src debugger)
+
+# Watches, search parsing, trace filters and breakpoint text; no machine.
+add_executable(memtools_test tests/memtools_test.c)
+target_link_libraries(memtools_test cocosession)
+target_include_directories(memtools_test PRIVATE debugger)
+add_test(NAME memtools COMMAND memtools_test)
 
 add_executable(cpu_switch_test tests/cpu_switch_test.c)
 target_link_libraries(cpu_switch_test cocosession)
@@ -442,7 +461,10 @@ add_test(NAME dasm COMMAND dasm_test)
 add_test(NAME symtab COMMAND symtab_test)
 add_test(NAME csrcinfo COMMAND csrcinfo_test)
 add_test(NAME dwtrace COMMAND dwtrace_test)
-add_test(NAME debug COMMAND debug_test)
+add_test(NAME debug COMMAND debug_test coco3)
+# The CoCo 1/2 path (SAM map types, no physical space), one machine per process.
+add_test(NAME debug_coco2 COMMAND debug_test coco2)
+set_tests_properties(debug debug_coco2 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180)
 add_test(NAME cpu_switch COMMAND cpu_switch_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME drivewire_smoke COMMAND drivewire_smoke)
@@ -455,6 +477,19 @@ add_test(NAME xroar_hooks_coco3 COMMAND xroar_hooks_test coco3)
 set_tests_properties(xroar_hooks_coco2 xroar_hooks_coco3 PROPERTIES
                      SKIP_RETURN_CODE 77 TIMEOUT 120)
 add_test(NAME gimerow COMMAND gimerow_test)
+
+# The Video tab: synthetic captures (no machine), and a real machine per chip
+# (one machine per process, like video_test).
+add_executable(vidtab_test tests/vidtab_test.c)
+target_link_libraries(vidtab_test cocosession)
+add_test(NAME vidtab COMMAND vidtab_test)
+add_executable(vidtab_live_test tests/vidtab_live_test.c)
+target_link_libraries(vidtab_live_test cocosession)
+target_include_directories(vidtab_live_test PRIVATE src)
+add_test(NAME vidtab_live_coco2 COMMAND vidtab_live_test coco2)
+add_test(NAME vidtab_live_coco3 COMMAND vidtab_live_test coco3)
+set_tests_properties(vidtab_live_coco2 vidtab_live_coco3 PROPERTIES
+                     SKIP_RETURN_CODE 77 TIMEOUT 120)
 # All need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;
 # drivewire_smoke additionally needs libfujinet and a free Becker port. All
 # are reported as 77 rather than as failures.

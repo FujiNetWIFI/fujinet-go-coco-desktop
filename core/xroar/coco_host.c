@@ -29,6 +29,8 @@
 #include "vo.h"
 #include "xroar.h"
 
+#include "cocovidcap.h"
+
 /* --- log sink --------------------------------------------------------------
  * Replaces android/log.h. Same three levels, same call sites. */
 static CocoLogSink g_log_sink = NULL;
@@ -69,6 +71,7 @@ void cocohost_set_frame_sink(CocoFrameSink sink, void *user) {
 }
 
 void cocohost_emit_frame(const uint32_t *xrgb8888, int width, int height) {
+    cocovid_host_frame(xrgb8888, width, height);
     CocoFrameSink sink = g_frame_sink;
     if (sink) {
         sink(xrgb8888, width, height, g_frame_user);

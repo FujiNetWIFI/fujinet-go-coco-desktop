@@ -37,6 +37,7 @@
 #include <stdint.h>
 
 #include "cocosession.h"
+#include "cocovidcap.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,6 +61,41 @@ extern "C" {
  * has no video hardware this can identify. */
 int cocodebug_video_decode(cocodebug *d, uint32_t *pixels, int *out_w,
                            int *out_h);
+
+/* ---- one scanline, from a captured record (cocovidcap.h) -------------------
+ * Draws a line from the registers and bytes the video taps recorded for it,
+ * independent of the machine, so the Video tab can show a frame whose mode,
+ * palette or address changed halfway down. */
+typedef struct {
+    int width;          /* pixels written to codes[] (256 on a CoCo 1/2 and in the GIME's compatible mode; the
+                           mode's own width in its native modes); 0 when the line is not a display line */
+    int native_w;       /* the mode's own pixels across (width may repeat them) */
+    int nbytes;         /* bytes of the fetch the line shows */
+    int text;           /* alpha, semigraphics or GIME text */
+    int attr;           /* GIME text with an attribute byte after each character */
+    int bits;           /* bits per pixel of a graphics mode, else 0 */
+    char mode[64];      /* "RG6 256 x 192, 2 colours" */
+    int pal_n;          /* entries of pal in use: 12 (VDG colours) or 16 (GIME palette slots) */
+    uint32_t pal[16];   /* code -> 0xFFRRGGBB */
+} cocovideo_line_info;
+
+/* Fills codes[0..width) with one colour code per pixel (a VDG colour,
+ * enum vdg_colour, or a GIME palette slot 0-15; info->pal resolves them) and
+ * returns the width, or 0 when the record is not a display line. `max` is the
+ * room in codes (at least 256; COCOVIDEO_MAX_WIDTH covers every mode). */
+int cocovideo_line_decode(const cocovid_line *line, uint8_t *codes, int max,
+                          cocovideo_line_info *info);
+
+/* Which fetched byte drew pixel x of a decoded line: its index into
+ * line->data, or -1; *sub gets the pixel's position inside that byte's span
+ * (0 = leftmost). */
+int cocovideo_line_byte_at(const cocovid_line *line,
+                           const cocovideo_line_info *info, int x, int *sub);
+
+/* How far the chip's fetch address advances from one new row to the next (0
+ * for a line that is not a display line). A line that repeats its row starts
+ * at the same address; a scroll or a split shows as any other start. */
+int cocovideo_line_stride(const cocovid_line *line);
 
 #ifdef __cplusplus
 }

@@ -39,6 +39,21 @@ enum {
     COCO_DASM_ILLEGAL = 1 << 3,
 };
 
+/* What kind of control transfer an instruction is, for the trace's BRANCHES
+ * filter. Independent of the flags above: BRA, LBRA and JMP are FLOW_BRANCH /
+ * FLOW_JUMP even though they carry no COCO_DASM_BRANCH flag, and a PULS or
+ * PULU that pulls PC is FLOW_RETURN_PC though it carries no flag at all. */
+enum {
+    COCO_FLOW_NONE = 0,
+    COCO_FLOW_BRANCH,       /* BRA BRN Bcc LBRA LBRN LBcc */
+    COCO_FLOW_JUMP,         /* JMP */
+    COCO_FLOW_CALL,         /* JSR BSR LBSR */
+    COCO_FLOW_RETURN,       /* RTS RTI */
+    COCO_FLOW_PULL_PC,      /* PULS / PULU with PC in the list */
+    COCO_FLOW_TRANSFER_PC,  /* TFR / EXG with PC as either register */
+    COCO_FLOW_SWI           /* SWI SWI2 SWI3 */
+};
+
 typedef struct {
     uint16_t addr;                     /* where the instruction starts */
     uint8_t len;                       /* its length in bytes, >= 1 */
@@ -48,6 +63,7 @@ typedef struct {
     char operand[32];
     uint16_t target;                   /* valid when COCO_DASM_BRANCH */
     unsigned flags;
+    uint8_t flow;                      /* COCO_FLOW_* */
 } coco_dasm_line;
 
 /* Reader for the bytes to decode. Returning a byte for any address is fine;

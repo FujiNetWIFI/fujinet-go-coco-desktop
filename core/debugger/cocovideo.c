@@ -59,7 +59,10 @@
 
 #include "top-config.h"
 
+#include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "machine.h"
 #include "mc6821.h"
@@ -760,4 +763,387 @@ int cocodebug_video_decode(cocodebug *d, uint32_t *pixels, int *out_w,
         return decode_vdg(d, sam, pia1, pixels, out_w, out_h);
 
     return 0;
+}
+
+/* ---- one scanline, from a captured record ---------------------------------
+ * The Video tab's Decoded view draws each line from the registers and bytes
+ * the video taps recorded for it (core/include/cocovidcap.h), so a mode or
+ * palette change in the middle of a frame shows. The shapes are the ones
+ * above, one line at a time, producing a colour CODE per pixel instead of an
+ * RGB value: a VDG colour (enum vdg_colour) on a CoCo 1/2, a palette slot
+ * (0-15) on a CoCo 3. info->pal resolves a code to RGB; the tab also shows
+ * the codes themselves (its Values view). A line is VDG_CANVAS_W (256) wide
+ * on a CoCo 1/2 and in the GIME's compatible mode, and the mode's own width
+ * in the GIME's native modes. Bytes the capture did not hold read as 0. */
+
+static unsigned line_byte(const cocovid_line *line, unsigned index)
+{
+    return index < line->nbytes && index < COCOVID_MAX_BYTES ? line->data[index] : 0;
+}
+
+static void line_fill(uint8_t *codes, int x0, int count, uint8_t code)
+{
+    int i;
+
+    for (i = 0; i < count; i++)
+        codes[x0 + i] = code;
+}
+
+static void line_set_mode(cocovideo_line_info *info, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+static void line_set_mode(cocovideo_line_info *info, const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    vsnprintf(info->mode, sizeof info->mode, fmt, args);
+    va_end(args);
+}
+
+static int line_decode_vdg(const cocovid_line *line, uint8_t *codes,
+                           cocovideo_line_info *info)
+{
+    static const char *const gfx_name[8] = {
+        "CG1", "RG1", "CG2", "RG2", "CG3", "RG3", "CG6", "RG6",
+    };
+    unsigned vmode = line->pia_mode & 0xf8u;
+    int nA_G = (vmode & 0x80) != 0;
+    int GM = (int)(vmode >> 4) & 7;
+    int GM0 = GM & 1;
+    int css = (vmode & 0x08) != 0;
+    int i;
+
+    for (i = 0; i < 12; i++)
+        info->pal[i] = vdg_pixel(i);
+    info->pal_n = 12;
+    info->width = VDG_CANVAS_W;
+
+    if (!nA_G) {
+        int subrow = line->vdg_row % 12;
+        int col;
+
+        info->nbytes = 32;
+        info->native_w = 256;
+        info->text = 1;
+        line_set_mode(info, "Alpha / semigraphics %s, %s",
+                      GM0 ? "(SG6 blocks)" : "(SG4 blocks)",
+                      css ? "orange set" : "green set");
+        for (col = 0; col < 32; col++) {
+            uint8_t byte = (uint8_t)line_byte(line, (unsigned)col);
+            int x0 = col * 8;
+
+            if (!(byte & 0x80)) {
+                uint8_t glyph = font_6847[(byte & 0x3f) * 12 + subrow];
+                uint8_t fg = css ? VDG_BRIGHT_ORANGE : VDG_GREEN;
+                uint8_t bg = css ? VDG_DARK_ORANGE : VDG_DARK_GREEN;
+
+                if (byte & 0x40) { uint8_t swap = fg; fg = bg; bg = swap; }
+                for (i = 0; i < 8; i++)
+                    codes[x0 + i] = (glyph & (0x80 >> i)) ? fg : bg;
+            } else if (!GM0) {
+                uint8_t fg = (byte >> 4) & 7;
+                int bits = (subrow < 6) ? ((byte >> 2) & 3) : (byte & 3);
+
+                line_fill(codes, x0, 4, (bits & 2) ? fg : VDG_BLACK);
+                line_fill(codes, x0 + 4, 4, (bits & 1) ? fg : VDG_BLACK);
+            } else {
+                uint8_t fg = (uint8_t)((css ? VDG_WHITE : VDG_GREEN) + ((byte >> 6) & 3));
+                int bits = (subrow < 4) ? ((byte >> 4) & 3)
+                         : (subrow < 8) ? ((byte >> 2) & 3)
+                                        : (byte & 3);
+
+                line_fill(codes, x0, 4, (bits & 2) ? fg : VDG_BLACK);
+                line_fill(codes, x0 + 4, 4, (bits & 1) ? fg : VDG_BLACK);
+            }
+        }
+    } else {
+        int bytes_per_row = gfx_geom[GM].bytes_per_row;
+        int native_w = bytes_per_row * (GM0 ? 8 : 4);
+        int scale_x = VDG_CANVAS_W / native_w;
+        int col, n, k;
+
+        info->nbytes = bytes_per_row;
+        info->native_w = native_w;
+        info->bits = GM0 ? 1 : 2;
+        line_set_mode(info, "%s %d x %d, %d colours%s", gfx_name[GM], native_w,
+                      192 / gfx_geom[GM].nLPR, GM0 ? 2 : 4,
+                      css ? ", set 1" : ", set 0");
+        n = GM0 ? 8 : 4;
+        for (col = 0; col < bytes_per_row; col++) {
+            uint8_t byte = (uint8_t)line_byte(line, (unsigned)col);
+
+            for (i = 0; i < n; i++) {
+                uint8_t code;
+
+                if (GM0)
+                    code = (byte & (0x80 >> i)) ? (css ? VDG_WHITE : VDG_GREEN)
+                                                : (css ? VDG_BLACK : VDG_DARK_GREEN);
+                else
+                    code = (uint8_t)((css ? VDG_WHITE : VDG_GREEN) +
+                                     ((byte >> (6 - i * 2)) & 3));
+                for (k = 0; k < scale_x; k++)
+                    codes[(col * n + i) * scale_x + k] = code;
+            }
+        }
+    }
+    return 1;
+}
+
+static int line_decode_gime_coco(const cocovid_line *line, uint8_t *codes,
+                                 cocovideo_line_info *info)
+{
+    unsigned vmode = line->pia_mode & 0xf8u;
+    int nA_G = (vmode & 0x80) != 0;
+    int GM = (int)(vmode >> 4) & 7;
+    int GM0 = GM & 1;
+    int css = (vmode & 0x08) != 0;
+    unsigned bpr = (!nA_G || !(line->g_sam_v & 1)) ? 32 : 16;
+    int native_w = (int)bpr * (nA_G ? (GM0 ? 8 : 4) : 8);
+    int scale_x = VDG_CANVAS_W / native_w;
+    int subrow = (int)((line->g_row - 1u) & 15u);
+    int col;
+    unsigned i;
+    uint32_t rgb;
+
+    for (i = 0; i < 16; i++) {
+        rgb = gime_rgb_from_index(line->g_pal[i] & 0x3f);
+        info->pal[i] = rgb;
+    }
+    info->pal_n = 16;
+    info->width = VDG_CANVAS_W;
+    info->nbytes = (int)bpr;
+    info->native_w = native_w;
+    info->text = !nA_G;
+    info->bits = nA_G ? (GM0 ? 1 : 2) : 0;
+    if (nA_G)
+        line_set_mode(info, "GIME compatible %s, %d pixels across",
+                      GM0 ? "RG" : "CG", native_w);
+    else
+        line_set_mode(info, "GIME compatible alpha / semigraphics");
+
+    for (col = 0; col < (int)bpr; col++) {
+        uint8_t byte = (uint8_t)line_byte(line, (unsigned)col);
+        uint8_t out[8];
+        int n, px_per, k, pix;
+
+        if (!nA_G && !(byte & 0x80)) {
+            int GM1 = (GM >> 1) & 1;
+            int inv = ((byte & 0x40) != 0) ^ GM1;
+            int c = byte & 0x7f;
+            uint8_t glyph;
+            uint8_t fg = css ? TCC1014_BRIGHT_ORANGE : TCC1014_BRIGHT_GREEN;
+            uint8_t bg = css ? TCC1014_DARK_ORANGE : TCC1014_DARK_GREEN;
+
+            if (c < 0x20) {
+                c |= GM0 ? 0x60 : 0x40;
+                inv ^= GM0;
+            } else if (c >= 0x60) {
+                c ^= 0x40;
+            }
+            glyph = font_gime[c * 12 + (subrow % 12)];
+            if (inv) { uint8_t swap = fg; fg = bg; bg = swap; }
+            for (pix = 0; pix < 8; pix++)
+                out[pix] = (glyph & (0x80 >> pix)) ? fg : bg;
+            n = 8;
+        } else if (!nA_G) {
+            int sr = subrow % 12;
+            int bits = (sr < 6) ? ((byte >> 2) & 3) : (byte & 3);
+            uint8_t fg = (byte >> 4) & 7;
+
+            out[0] = (bits & 2) ? fg : TCC1014_RGCSS0_0;
+            out[1] = (bits & 1) ? fg : TCC1014_RGCSS0_0;
+            n = 2;
+        } else if (GM0) {
+            uint8_t fg = css ? TCC1014_RGCSS1_1 : TCC1014_RGCSS0_1;
+            uint8_t bg = css ? TCC1014_RGCSS1_0 : TCC1014_RGCSS0_0;
+
+            for (pix = 0; pix < 8; pix++)
+                out[pix] = (byte & (0x80 >> pix)) ? fg : bg;
+            n = 8;
+        } else {
+            int base_c = css ? TCC1014_WHITE : TCC1014_GREEN;
+
+            for (pix = 0; pix < 4; pix++)
+                out[pix] = (uint8_t)(base_c + ((byte >> (6 - pix * 2)) & 3));
+            n = 4;
+        }
+        px_per = 8 / n;
+        for (pix = 0; pix < n; pix++)
+            for (k = 0; k < px_per * scale_x; k++)
+                codes[(col * 8 + pix * px_per) * scale_x + k] = out[pix];
+    }
+    return 1;
+}
+
+static int line_decode_gime_native(const cocovid_line *line, uint8_t *codes,
+                                   int max, cocovideo_line_info *info)
+{
+    unsigned bpr = line->g_bp ? hres_bpr_gfx[line->g_hres & 7]
+                              : hres_bpr_text[line->g_hres & 7];
+    unsigned rowmask = lpr_rowmask[line->g_lpr & 7];
+    unsigned fetch_bpr = line->g_bp ? bpr : (bpr << (line->g_cres & 1));
+    int bits_per_px = 0, px_per_byte = 8, native_w, i, col;
+    uint8_t rowbuf[COCOVID_MAX_BYTES];
+    uint32_t rgb;
+
+    for (i = 0; i < 16; i++) {
+        rgb = gime_rgb_from_index(line->g_pal[i] & 0x3f);
+        info->pal[i] = rgb;
+    }
+    info->pal_n = 16;
+    if (fetch_bpr > sizeof rowbuf)
+        fetch_bpr = (unsigned)sizeof rowbuf;
+    for (i = 0; i < (int)fetch_bpr; i++)
+        rowbuf[i] = (uint8_t)line_byte(line, (unsigned)i);
+    /* 16-colour 16-byte rows lose every second byte of the fetch (see
+     * decode_gime_native) */
+    if (line->g_bp && line->g_hres == 0 && line->g_cres >= 2)
+        for (i = 1; i < (int)fetch_bpr; i += 2)
+            rowbuf[i] = 0;
+
+    if (line->g_bp) {
+        switch (line->g_cres) {
+        case 0: default: bits_per_px = 1; break;
+        case 1:          bits_per_px = 2; break;
+        case 2: case 3:  bits_per_px = 4; break;
+        }
+        px_per_byte = 8 / bits_per_px;
+    }
+    native_w = (int)bpr * px_per_byte;
+    if (native_w > max)
+        native_w = max;
+    info->width = native_w;
+    info->native_w = native_w;
+    info->bits = bits_per_px;
+    info->text = !line->g_bp;
+    info->attr = !line->g_bp && (line->g_cres & 1);
+    info->nbytes = (int)fetch_bpr;
+    if (line->g_bp)
+        line_set_mode(info, "GIME graphics, %d pixels across, %d colours",
+                      native_w, 1 << bits_per_px);
+    else
+        line_set_mode(info, "GIME text %d columns%s", (int)bpr,
+                      info->attr ? " with attributes" : "");
+
+    if (line->g_bp) {
+        for (col = 0; col < (int)bpr && col * px_per_byte < native_w; col++) {
+            uint8_t byte = rowbuf[col];
+            int pix;
+
+            for (pix = 0; pix < px_per_byte; pix++) {
+                int x0 = col * px_per_byte + pix;
+
+                if (x0 >= native_w)
+                    break;
+                codes[x0] = (uint8_t)(((byte >> (8 - bits_per_px * (pix + 1))) &
+                                       ((1u << bits_per_px) - 1)) & 15);
+            }
+        }
+    } else {
+        int font_row = (int)(line->g_row & 15u);
+        const uint8_t *src = rowbuf;
+        int cell;
+
+        if (font_row > 11)
+            font_row = 0;
+        for (cell = 0; cell < (int)bpr && cell * 8 < native_w; cell++) {
+            int c = *src++ & 0x7f;
+            uint8_t glyph = font_gime[c * 12 + font_row];
+            uint8_t fg, bg;
+            int pix;
+
+            if (line->g_cres & 1) {
+                uint8_t attr = *src++;
+
+                fg = (uint8_t)(8 | ((attr >> 3) & 7));
+                bg = attr & 7;
+                if ((attr & 0x40) && ((unsigned)font_row & rowmask) == rowmask)
+                    glyph = 0xff;
+            } else {
+                fg = 1;
+                bg = 0;
+            }
+            for (pix = 0; pix < 8; pix++) {
+                int x0 = cell * 8 + pix;
+
+                if (x0 >= native_w)
+                    break;
+                codes[x0] = (glyph & (0x80 >> pix)) ? fg : bg;
+            }
+        }
+    }
+    return 1;
+}
+
+int cocovideo_line_decode(const cocovid_line *line, uint8_t *codes, int max,
+                          cocovideo_line_info *info)
+{
+    int ok;
+
+    if (!info)
+        return 0;
+    memset(info, 0, sizeof *info);
+    if (!line || !codes || max < VDG_CANVAS_W || !line->valid ||
+        !(line->flags & COCOVID_LF_ACTIVE))
+        return 0;
+    if (!line->gime)
+        ok = line_decode_vdg(line, codes, info);
+    else if (line->g_coco)
+        ok = line_decode_gime_coco(line, codes, info);
+    else
+        ok = line_decode_gime_native(line, codes, max, info);
+    return ok ? info->width : 0;
+}
+
+int cocovideo_line_byte_at(const cocovid_line *line,
+                           const cocovideo_line_info *info, int x, int *sub)
+{
+    int per_byte, index, cells;
+
+    if (!line || !info || info->width <= 0 || x < 0 || x >= info->width)
+        return -1;
+    if (info->attr) {
+        cells = info->nbytes / 2;
+        per_byte = info->width / cells;
+        index = x / per_byte;
+        if (sub)
+            *sub = x % per_byte;
+        index *= 2;
+    } else {
+        per_byte = info->width / info->nbytes;
+        if (per_byte < 1)
+            per_byte = 1;
+        index = x / per_byte;
+        if (sub)
+            *sub = x % per_byte;
+    }
+    if (index >= info->nbytes)
+        return -1;
+    (void)line;
+    return index;
+}
+
+int cocovideo_line_stride(const cocovid_line *line)
+{
+    if (!line || !(line->flags & COCOVID_LF_ACTIVE))
+        return 0;
+    if (!line->gime) {
+        unsigned vmode = line->pia_mode & 0xf8u;
+        int nA_G = (vmode & 0x80) != 0;
+
+        return nA_G ? gfx_geom[(vmode >> 4) & 7].bytes_per_row : 32;
+    }
+    if (line->g_hven)
+        return 256;
+    if (line->g_coco) {
+        int nA_G = (line->pia_mode & 0x80) != 0;
+
+        return (!nA_G || !(line->g_sam_v & 1)) ? 32 : 16;
+    }
+    {
+        unsigned bpr = line->g_bp ? hres_bpr_gfx[line->g_hres & 7]
+                                  : hres_bpr_text[line->g_hres & 7];
+
+        return (int)(line->g_bp ? bpr : (bpr << (line->g_cres & 1)));
+    }
 }

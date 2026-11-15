@@ -49,4 +49,13 @@ int cocosymtab_lookup_addr(const cocosymtab *t, uint16_t addr, char *dst,
 int cocosymtab_lookup_name(const cocosymtab *t, const char *name,
                            uint16_t *addr_out);
 
+/* Table walk, for a Symbols tab: entries 0..count-1 in table order (the
+ * built-ins first, then what was loaded or added). Index order can change
+ * when symbols are added or cleared. */
+int cocosymtab_count(const cocosymtab *t);
+/* Returns 1 and fills the outputs (name truncated to namesz), 0 past the end.
+ * *builtin is 1 for an entry cocosymtab_clear_user keeps. */
+int cocosymtab_get(const cocosymtab *t, int index, uint16_t *addr, char *name,
+                   int namesz, int *builtin);
+
 #endif /* COCO_SYMTAB_H */

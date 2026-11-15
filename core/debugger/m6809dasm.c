@@ -653,6 +653,46 @@ static unsigned flow_flags(const char *mnemonic)
     return 0;
 }
 
+/* The control-transfer class, from the mnemonic and (for the stack and
+ * register-transfer forms) the postbyte, which sits right after the
+ * opcode. */
+static uint8_t flow_class(const coco_dasm_line *line)
+{
+    const char *name = line->mnemonic;
+    static const char *const swi[] = { "SWI", "SWI2", "SWI3", NULL };
+    int i;
+
+    if (!strcmp(name, "JMP"))
+        return COCO_FLOW_JUMP;
+    if (!strcmp(name, "JSR") || !strcmp(name, "BSR") || !strcmp(name, "LBSR"))
+        return COCO_FLOW_CALL;
+    if (!strcmp(name, "RTS") || !strcmp(name, "RTI"))
+        return COCO_FLOW_RETURN;
+    for (i = 0; swi[i]; i++)
+        if (!strcmp(name, swi[i]))
+            return COCO_FLOW_SWI;
+    if (!strcmp(name, "PULS") || !strcmp(name, "PULU"))
+        return line->len >= 2 && (line->bytes[1] & 0x80) ? COCO_FLOW_PULL_PC
+                                                         : COCO_FLOW_NONE;
+    if (!strcmp(name, "TFR") || !strcmp(name, "EXG"))
+        return line->len >= 2 && ((line->bytes[1] >> 4) == 5 ||
+                                  (line->bytes[1] & 15) == 5)
+                   ? COCO_FLOW_TRANSFER_PC : COCO_FLOW_NONE;
+    /* Whitelist: BITA, BAND, BEOR... also start with B. */
+    if (name[0] == 'L' && name[1] == 'B')
+        name++;
+    if (name[0] == 'B' && strlen(name) == 3) {
+        static const char *const conds[] = {
+            "RA", "RN", "HI", "LS", "CC", "HS", "CS", "LO", "NE", "EQ",
+            "VC", "VS", "PL", "MI", "GE", "LT", "GT", "LE", NULL
+        };
+        for (i = 0; conds[i]; i++)
+            if (!strcmp(name + 1, conds[i]))
+                return COCO_FLOW_BRANCH;
+    }
+    return COCO_FLOW_NONE;
+}
+
 int coco_dasm_one_cpu(uint16_t addr, coco_dasm_read read, void *user,
                       coco_dasm_cpu cpu, coco_dasm_line *out)
 {
@@ -802,6 +842,8 @@ int coco_dasm_one_cpu(uint16_t addr, coco_dasm_read read, void *user,
 
     out->len = (uint8_t)(it.n > COCO_DASM_MAX_BYTES ? COCO_DASM_MAX_BYTES
                                                     : it.n);
+    out->flow = (out->flags & COCO_DASM_ILLEGAL) ? COCO_FLOW_NONE
+                                                 : flow_class(out);
     if (out->operand[0])
         snprintf(out->text, sizeof(out->text), "%-6s%s", out->mnemonic,
                  out->operand);

@@ -22,6 +22,7 @@
 #include <time.h>
 
 #include "coco_host.h"
+#include "cocovidtab.h"
 #include "compat.h"
 #include "session_internal.h"
 
@@ -550,6 +551,7 @@ int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
      * debugger opens: it is most useful about what happened first. */
     if (!s->debugger)
         s->debugger = cocodebug_create(s);
+    cocodebug_set_video_text(cocovid_console_text);
     cocodebug_trace_install(s->debugger);
 
     s->stop_flag = 0;
