@@ -1572,7 +1572,9 @@ static void refresh_hist(DbgWin *state, int idx, gboolean force)
         }
     text = g_string_new(NULL);
     if (shown == 0)
-        g_string_append(text, recording ? "(nothing recorded yet: let the machine run)"
+        g_string_append(text, recording
+                                ? (count > 0 ? "(no recorded instruction matches this filter)"
+                                             : "(nothing recorded yet: let the machine run)")
                               : "Recording is off. Press Record, then let the machine run.");
     for (index = shown - 1; index >= 0; index--) {  /* oldest first */
         char line[256];
@@ -1795,6 +1797,23 @@ static void on_run_to_cursor(GtkButton *button, gpointer user_data)
     refresh_now(state);
 }
 
+/* The gutter and F9: a click on a breakpoint that is switched off (the hollow
+ * dot) switches it back on; otherwise the breakpoint is set or removed. */
+static void toggle_exec_breakpoint(DbgWin *state, uint16_t address)
+{
+    static cocodebug_breakpoint list[COCODEBUG_MAX_BREAKPOINTS];
+    const int count = cocodebug_breakpoints_list(state->dbg, list, COCODEBUG_MAX_BREAKPOINTS);
+    int index;
+    for (index = 0; index < count; index++) {
+        if (list[index].type == COCODEBUG_BP_EXEC && !list[index].enabled &&
+            address >= list[index].start && address <= list[index].end) {
+            cocodebug_breakpoint_enable(state->dbg, list[index].id, 1);
+            return;
+        }
+    }
+    cocodebug_breakpoint_toggle(state->dbg, address);
+}
+
 /* F9 and the gutter: an execute breakpoint on the selected line. */
 static void toggle_selected(DbgWin *state)
 {
@@ -1802,7 +1821,7 @@ static void toggle_selected(DbgWin *state)
         toast(state, "Select a disassembly line first");
         return;
     }
-    cocodebug_breakpoint_toggle(state->dbg, (uint16_t)state->selected);
+    toggle_exec_breakpoint(state, (uint16_t)state->selected);
     refresh_now(state);
 }
 
@@ -2087,7 +2106,7 @@ static void on_disasm_click(GtkGestureClick *gesture, int count, double position
     gutter = buffer_x < rect.x;
     state->selected = state->line_addr[line];
     if ((count == 1 && gutter) || (count == 2 && !gutter))
-        cocodebug_breakpoint_toggle(state->dbg, (uint16_t)state->selected);
+        toggle_exec_breakpoint(state, (uint16_t)state->selected);
     refresh_disasm(state);
 }
 

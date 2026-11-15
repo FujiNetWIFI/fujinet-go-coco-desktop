@@ -299,7 +299,7 @@ static void fill_colours(Vid *video)
     for (index = 0; index < NSWATCH; index++) {
         char buf[160];
         if (index < count)
-            g_snprintf(buf, sizeof buf, "%-8s #%06X  %8ld px  %s", swatches[index].name,
+            g_snprintf(buf, sizeof buf, "%-13s #%06X  %8ld px  %s", swatches[index].name,
                        swatches[index].rgb & 0xffffff, swatches[index].uses, swatches[index].detail);
         else
             buf[0] = '\0';
@@ -608,6 +608,9 @@ GtkWidget *dbg_video_new(cocodebug *dbg)
     gtk_text_view_set_cursor_visible(video->regs_text, FALSE);
     gtk_text_view_set_monospace(video->regs_text, TRUE);
     gtk_text_view_set_wrap_mode(video->regs_text, GTK_WRAP_WORD_CHAR);
+    /* a long meaning wraps under the Meaning column, not under the name */
+    gtk_text_view_set_left_margin(video->regs_text, 6);
+    gtk_text_view_set_indent(video->regs_text, -152);
     buffer = gtk_text_view_get_buffer(video->regs_text);
     gtk_text_buffer_create_tag(buffer, "changed", "background", "#C8B58C", "foreground", "#000000",
                                "weight", 700, NULL);
