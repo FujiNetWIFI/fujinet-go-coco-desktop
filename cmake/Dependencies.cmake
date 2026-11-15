@@ -33,6 +33,11 @@ find_package(Git QUIET)
 # on the way into third_party/xroar.
 set(XROAR_VERSION "1.11")
 set(XROAR_URL "https://www.6809.org.uk/xroar/dl/xroar-${XROAR_VERSION}.tar.gz")
+# Upstream keeps only its newest releases in dl/ (1.11 went 404 on 2026-11-15
+# and broke every CI job). The Wayback Machine holds the same bytes; the pinned
+# SHA256 is what makes either source trustworthy.
+set(XROAR_URL_FALLBACK
+    "https://web.archive.org/web/2026id_/https://www.6809.org.uk/xroar/dl/xroar-${XROAR_VERSION}.tar.gz")
 set(XROAR_SHA256 "70270805ebd52c0b62237cc2f28b32b5c7df9764d10a7c7190de584cfc6e95af")
 
 # fujinet-firmware: PR #2247's head (0c9f00c16), fork branch boip-idle-wait =
@@ -45,14 +50,14 @@ set(FUJINET_URL "https://github.com/tschak909/fujinet-firmware")
 # coco_provide_dependency(NAME <n> PATH <p> SENTINEL <file> OVERRIDE <VAR>
 #                         RESULT <out>
 #                         [URL <u> COMMIT <sha>]        # git dependency
-#                         [ARCHIVE <url> SHA256 <hash> [STRIP <dir>]])
+#                         [ARCHIVE <url> [FALLBACK <url>] SHA256 <hash> [STRIP <dir>]])
 #
 # SENTINEL is a path inside the checkout that only exists once the sources are
 # really there -- an empty submodule directory is otherwise indistinguishable
 # from a populated one, and a half-extracted archive from a complete one.
 function(coco_provide_dependency)
   cmake_parse_arguments(DEP ""
-    "NAME;PATH;URL;COMMIT;ARCHIVE;SHA256;STRIP;SENTINEL;OVERRIDE;RESULT" ""
+    "NAME;PATH;URL;COMMIT;ARCHIVE;FALLBACK;SHA256;STRIP;SENTINEL;OVERRIDE;RESULT" ""
     ${ARGN})
 
   # 1. Explicit override: a checkout the developer maintains themselves.
@@ -86,16 +91,35 @@ function(coco_provide_dependency)
 
     if(NOT EXISTS "${_dl}")
       message(STATUS "${DEP_NAME}: downloading ${DEP_ARCHIVE}")
-      file(DOWNLOAD "${DEP_ARCHIVE}" "${_dl}"
-           EXPECTED_HASH SHA256=${DEP_SHA256}
-           TLS_VERIFY ON
-           STATUS _dl_status)
-      list(GET _dl_status 0 _dl_rc)
-      if(NOT _dl_rc EQUAL 0)
+      set(_dl_rc 1)
+      set(_dl_msg "")
+      foreach(_url IN ITEMS "${DEP_ARCHIVE}" "${DEP_FALLBACK}")
+        if(NOT _url OR _dl_rc EQUAL 0)
+          continue()
+        endif()
+        # No EXPECTED_HASH here: on a failed download it raises a CMake error
+        # that fails the configure even with STATUS, and the fallback would
+        # never run. The hash is checked by hand below instead.
+        file(DOWNLOAD "${_url}" "${_dl}"
+             TLS_VERIFY ON
+             STATUS _dl_status)
+        list(GET _dl_status 0 _dl_rc)
         list(GET _dl_status 1 _dl_msg)
-        file(REMOVE "${_dl}")
+        if(_dl_rc EQUAL 0)
+          file(SHA256 "${_dl}" _dl_hash)
+          if(NOT _dl_hash STREQUAL "${DEP_SHA256}")
+            set(_dl_rc 1)
+            set(_dl_msg "SHA256 ${_dl_hash} is not the pinned ${DEP_SHA256}")
+          endif()
+        endif()
+        if(NOT _dl_rc EQUAL 0)
+          file(REMOVE "${_dl}")
+          message(STATUS "${DEP_NAME}: ${_url} failed: ${_dl_msg}")
+        endif()
+      endforeach()
+      if(NOT _dl_rc EQUAL 0)
         message(FATAL_ERROR
-          "Could not download ${DEP_NAME} from ${DEP_ARCHIVE}: ${_dl_msg}\n"
+          "Could not download ${DEP_NAME} from ${DEP_ARCHIVE} (or ${DEP_FALLBACK}): ${_dl_msg}\n"
           "Download it by hand and unpack it, then point ${DEP_OVERRIDE} at "
           "the result.")
       endif()

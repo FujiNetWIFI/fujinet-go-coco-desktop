@@ -134,6 +134,8 @@ modules:
       # finds src/becker.c (the SENTINEL) already here.
       - type: archive
         url: https://www.6809.org.uk/xroar/dl/xroar-1.11.tar.gz
+        mirror-urls:
+          - https://web.archive.org/web/2026id_/https://www.6809.org.uk/xroar/dl/xroar-1.11.tar.gz
         sha256: 70270805ebd52c0b62237cc2f28b32b5c7df9764d10a7c7190de584cfc6e95af
         strip-components: 1
         dest: third_party/xroar

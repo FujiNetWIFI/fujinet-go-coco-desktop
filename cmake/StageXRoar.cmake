@@ -36,6 +36,7 @@ coco_provide_dependency(
   NAME XRoar
   PATH third_party/xroar
   ARCHIVE "${XROAR_URL}"
+  FALLBACK "${XROAR_URL_FALLBACK}"
   SHA256 "${XROAR_SHA256}"
   STRIP "xroar-${XROAR_VERSION}"
   SENTINEL src/becker.c
