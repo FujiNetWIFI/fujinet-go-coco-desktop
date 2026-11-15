@@ -36,6 +36,44 @@ struct _CocoWindow {
 
 G_DEFINE_FINAL_TYPE(CocoWindow, coco_window, ADW_TYPE_APPLICATION_WINDOW)
 
+/* ---- the accent --------------------------------------------------------- */
+
+/* The CoCo green for the debugger's PC bar, its Run button while stopped and
+ * its marks. Registered at startup (not when a window first needs it) so every
+ * window finds it. Dark ink on the fill; as a text colour the green is only
+ * readable on a dark theme, so a light one gets the darker green. */
+static GtkCssProvider *s_accent_css;
+
+static void load_accent_css(gboolean dark)
+{
+    char buf[1024];
+    g_snprintf(buf, sizeof buf,
+        ".coco-accent { background: #%06x; color: #%06x; }\n"
+        ".coco-accent:hover { background: shade(#%06x, 1.08); }\n"
+        ".coco-accent-text { color: #%06x; font-weight: bold; }\n",
+        COCOSESSION_ACCENT_RGB, COCOSESSION_ACCENT_INK_RGB, COCOSESSION_ACCENT_RGB,
+        dark ? COCOSESSION_ACCENT_RGB : COCOSESSION_ACCENT_DARK_RGB);
+    gtk_css_provider_load_from_string(s_accent_css, buf);
+}
+
+static void on_dark_changed(AdwStyleManager *manager, GParamSpec *pspec, gpointer user_data)
+{
+    (void)pspec; (void)user_data;
+    load_accent_css(adw_style_manager_get_dark(manager));
+}
+
+static void install_accent_css(void)
+{
+    AdwStyleManager *manager = adw_style_manager_get_default();
+    if (s_accent_css)
+        return;
+    s_accent_css = gtk_css_provider_new();
+    load_accent_css(adw_style_manager_get_dark(manager));
+    gtk_style_context_add_provider_for_display(gdk_display_get_default(),
+        GTK_STYLE_PROVIDER(s_accent_css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_signal_connect(manager, "notify::dark", G_CALLBACK(on_dark_changed), NULL);
+}
+
 /* ---- helpers ------------------------------------------------------------ */
 
 void coco_window_toast(CocoWindow *self, const char *message)
@@ -217,7 +255,7 @@ gboolean coco_window_key(CocoWindow *self, guint keyval,
             gtk_window_fullscreen(GTK_WINDOW(self));
         return TRUE;
     case GDK_KEY_F12:
-        gtk_widget_activate_action(GTK_WIDGET(self), "win.debugger", NULL);
+        coco_debugger_toggle(GTK_WINDOW(self), self->session);
         return TRUE;
     default:
         break;
@@ -767,6 +805,7 @@ GtkWidget *coco_window_new(AdwApplication *app, cocosession *session)
     GtkEventController *keys, *focus;
 
     self->session = session;
+    install_accent_css();
 
     g_action_map_add_action_entries(G_ACTION_MAP(self), win_actions,
                                     G_N_ELEMENTS(win_actions), self);

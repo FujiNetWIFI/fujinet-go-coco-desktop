@@ -21,6 +21,7 @@ set(GNOME_SOURCES
   controllers/controllers_window.c
   help/help_window.c
   debugger/dbg_window.c
+  debugger/dbg_video.c
 )
 
 set(GNOME_APP_ID online.fujinet.go.coco.gnome)
