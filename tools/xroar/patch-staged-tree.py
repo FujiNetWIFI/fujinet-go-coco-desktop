@@ -30,6 +30,13 @@ Three jobs:
      is the one gap: a getter that copies the handful of fields cocovideo.c
      cannot get any other way into a plain public struct.
 
+  4. Add the engine-side hooks the family debugger needs (bus tap, side-effect-
+     free peek and memory map, SAM/GIME/VDG accessors, chainable video taps).
+     The public contract is tools/xroar/support/machine_debug.h (copied into
+     the staged tree by cmake/StageXRoar.cmake) and core/include/cocoxroar.h;
+     the C bodies live in tools/xroar/support/fragments/*.inc and are spliced
+     in at anchors below.
+
 Everything is written back as UTF-8 with surrogateescape and no newline
 translation: Python on Windows otherwise decodes these sources as cp1252 and
 rewrites every LF as CRLF on the way out.
@@ -51,6 +58,17 @@ def write(p: Path, text: str) -> None:
 
 def fail(msg: str) -> None:
     sys.exit(f"patch-staged-tree.py: {msg}")
+
+
+SUPPORT_DIR = Path(__file__).resolve().parent / "support"
+
+
+def fragment(name: str) -> str:
+    """C source spliced into the staged tree, from support/fragments/."""
+    p = SUPPORT_DIR / "fragments" / name
+    if not p.exists():
+        fail(f"fragment {name} not found under {p.parent}")
+    return read(p)
 
 
 def patch(root: Path, rel: str, transforms) -> None:
@@ -388,9 +406,30 @@ struct tcc1014_debug_state {
 	_Bool HVEN;    // horizontal virtual screen enable
 	uint8_t SAM_V; // GIME's emulated SAM V register (COCO mode addressing)
 	uint16_t SAM_F; // GIME's emulated SAM F register (COCO mode video base)
+
+	// Added with the debugger hooks (machine_debug.h):
+	uint32_t B;     // current VRAM address
+	unsigned row;   // current text row counter
+	unsigned scanline;
+	uint8_t registers[16];   // $FF90-$FF9F as last written
+	uint8_t palette_reg[16]; // $FFB0-$FFBF
+	uint8_t mmu_bank[16];    // $FFA0-$FFAF (both tasks)
+	uint16_t SAM_register;   // $FFC0-$FFDF mirror, as one 16-bit register
+	_Bool TY;       // SAM map type mirror
+	_Bool R1;       // SAM rate mirror
+	_Bool MC0, MC1, MC2, MC3; // INIT0 ROM map / constant RAM bits
+	_Bool MMUEN;
+	_Bool TINS;     // timer source
+	unsigned TR;    // MMU task select: 0 = task 1, 8 = task 2
+	unsigned irq_state, firq_state; // pending, unacknowledged
 };
 
 void tcc1014_get_debug_state(struct TCC1014 *, struct tcc1014_debug_state *);
+
+// Side-effect-free address decode: the S value; *ras says RAM is selected and
+// *zaddr is the 19-bit RAM address the cycle would present.
+unsigned tcc1014_debug_decode(struct TCC1014 *, uint16_t address, _Bool *ras, uint32_t *zaddr);
+unsigned tcc1014_debug_scanline(struct TCC1014 *);
 
 #endif
 """
@@ -412,8 +451,29 @@ void tcc1014_get_debug_state(struct TCC1014 *gimep, struct tcc1014_debug_state *
 	out->HVEN = gime->HVEN;
 	out->SAM_V = gime->SAM_V;
 	out->SAM_F = gime->SAM_F;
+	out->B = gime->B;
+	out->row = gime->row;
+	out->scanline = gime->scanline;
+	for (int index = 0; index < 16; index++) {
+		out->registers[index] = gime->registers[index];
+		out->palette_reg[index] = gime->palette_reg[index];
+		out->mmu_bank[index] = gime->mmu_bank[index];
+	}
+	out->SAM_register = gime->SAM_register;
+	out->TY = gime->TY;
+	out->R1 = gime->R1;
+	out->MC0 = gime->MC0;
+	out->MC1 = gime->MC1;
+	out->MC2 = gime->MC2;
+	out->MC3 = gime->MC3;
+	out->MMUEN = gime->MMUEN;
+	out->TINS = gime->TINS;
+	out->TR = gime->TR;
+	out->irq_state = gime->irq_state;
+	out->firq_state = gime->firq_state;
 }
 
+""" + fragment("tcc1014_debug.inc") + """
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 // GIME register writes
@@ -442,6 +502,212 @@ def add_gime_debug_accessor(root: Path) -> None:
             "\tgime->want_composite = value;\n"
             "}\n"
             + GIME_DEBUG_STATE_C,
+        ),
+    ])
+
+
+# --- 4. debugger hooks ------------------------------------------------------
+#
+# The contract is support/machine_debug.h (copied to src/ by StageXRoar.cmake)
+# and core/include/cocoxroar.h. Anchors are chosen to be the smallest unique
+# text; a missing one fails the build rather than leaving a hook unwired.
+
+def add_debug_hooks(root: Path) -> None:
+    if not (root / "src" / "machine_debug.h").exists():
+        fail("src/machine_debug.h is missing: cmake/StageXRoar.cmake copies it")
+
+    # struct machine: the tap and the memory access hooks.
+    patch(root, "src/machine.h", [
+        (
+            "#include \"breakpoint.h\"\n#include \"part.h\"\n",
+            "#include \"breakpoint.h\"\n#include \"machine_debug.h\"\n#include \"part.h\"\n",
+        ),
+        (
+            "\tstruct {\n\t\tint type;\n\t} keyboard;\n};\n",
+            "\tstruct {\n\t\tint type;\n\t} keyboard;\n"
+            "\n"
+            "\t// Debugger hooks (machine_debug.h).\n"
+            "\tmachine_bus_tap_func bus_tap;\n"
+            "\tvoid *bus_tap_ctx;\n"
+            "\tuint8_t (*peek_byte)(struct machine *mach, unsigned address);\n"
+            "\t_Bool (*poke_byte)(struct machine *mach, unsigned address, uint8_t value);\n"
+            "\tvoid (*memory_map)(struct machine *mach, struct machine_memory_map *map);\n"
+            "};\n",
+        ),
+    ])
+
+    # Machine-independent half: RAM access, memory map builder, video taps.
+    patch(root, "src/machine.c", [
+        (
+            "#include \"machine.h\"\n#include \"logging.h\"\n#include \"ram.h\"\n",
+            "#include \"events.h\"\n#include \"machine.h\"\n#include \"logging.h\"\n"
+            "#include \"mc6847/mc6847.h\"\n#include \"part.h\"\n#include \"ram.h\"\n"
+            "#include \"tcc1014/tcc1014.h\"\n",
+        ),
+        (
+            "static _Bool machine_read_elem(void *sptr, struct ser_handle *sh, int tag) {\n",
+            fragment("machine.inc")
+            + "static _Bool machine_read_elem(void *sptr, struct ser_handle *sh, int tag) {\n",
+        ),
+    ])
+
+    # SAM: RAM decode and registers.
+    patch(root, "src/mc6883.h", [
+        (
+            "_Bool mc6883_is_a(struct part *p, const char *name);\n",
+            "#include \"machine_debug.h\"\n\n"
+            "// Debugger support (machine_debug.h): where a CPU address lands in RAM\n"
+            "// (bank, row, column) without running a cycle. 0 when it is not RAM, or\n"
+            "// when the SAM is not an MC6883.\n"
+            "_Bool mc6883_debug_ram_address(struct MC6883 *, uint16_t address, unsigned *bank, unsigned *row, unsigned *col);\n\n"
+            "_Bool mc6883_is_a(struct part *p, const char *name);\n",
+        ),
+    ])
+    patch(root, "src/mc6883.c", [
+        (
+            "// Just the address decode from mc6883_mem_cycle().  Used to verify that a\n"
+            "// breakpoint refers to ROM.\n",
+            fragment("mc6883_debug.inc")
+            + "// Just the address decode from mc6883_mem_cycle().  Used to verify that a\n"
+            "// breakpoint refers to ROM.\n",
+        ),
+    ])
+
+    # VDG: scanline and mode lines.
+    patch(root, "src/mc6847/mc6847.h", [
+        (
+            "void mc6847_unpause(struct MC6847 *vdgp);\n\n#endif\n",
+            "void mc6847_unpause(struct MC6847 *vdgp);\n\n#include \"machine_debug.h\"\n\n#endif\n",
+        ),
+    ])
+    patch(root, "src/mc6847/mc6847.c", [
+        (
+            "static void render_scanline(struct MC6847_private *vdg);\n",
+            "static void render_scanline(struct MC6847_private *vdg);\n"
+            + fragment("mc6847_debug.inc"),
+        ),
+    ])
+
+    # PIA: a read that changes nothing.
+    patch(root, "src/mc6821.h", [
+        (
+            "uint8_t mc6821_read(struct MC6821 *pia, uint16_t A);\n",
+            "uint8_t mc6821_read(struct MC6821 *pia, uint16_t A);\n"
+            "// Same value, none of the side effects (machine_debug.h).\n"
+            "uint8_t mc6821_peek(struct MC6821 *pia, uint16_t address);\n",
+        ),
+    ])
+    patch(root, "src/mc6821.c", [
+        (
+            "static void write_cr(struct MC6821_side *side, uint8_t D) {\n",
+            fragment("mc6821_peek.inc")
+            + "static void write_cr(struct MC6821_side *side, uint8_t D) {\n",
+        ),
+    ])
+
+    # CoCo 1/2 (and the other Dragon-family machines): bus tap in the common
+    # cycle, peek/poke/map on the machine.
+    patch(root, "src/dragon/dragon.c", [
+        (
+            "static void dragon_op_rts(struct machine *m);\n",
+            "static void dragon_op_rts(struct machine *m);\n"
+            "static uint8_t dragon_peek_byte(struct machine *mach, unsigned address);\n"
+            "static _Bool dragon_poke_byte(struct machine *mach, unsigned address, uint8_t value);\n"
+            "static void dragon_memory_map(struct machine *mach, struct machine_memory_map *map);\n",
+        ),
+        (
+            "\tm->dump_ram = dragon_dump_ram;\n",
+            "\tm->dump_ram = dragon_dump_ram;\n"
+            "\tm->peek_byte = dragon_peek_byte;\n"
+            "\tm->poke_byte = dragon_poke_byte;\n"
+            "\tm->memory_map = dragon_memory_map;\n",
+        ),
+        (
+            "// Common routine called by cpu_cycle() (or override) to access RAM and devices\n"
+            "// for a CPU cycle.\n",
+            fragment("dragon_tap.inc")
+            + "// Common routine called by cpu_cycle() (or override) to access RAM and devices\n"
+            "// for a CPU cycle.\n",
+        ),
+        (
+            "\tif (!md->SAM->nWE) {\n"
+            "\t\tif (md->SAM->RAS0) {\n"
+            "\t\t\tram_d8(md->RAM, 0, 0, Zrow, Zcol, &md->CPU->D);\n"
+            "\t\t}\n"
+            "\t\tif (md->SAM->RAS1) {\n"
+            "\t\t\tram_d8(md->RAM, 0, 1, Zrow, Zcol, &md->CPU->D);\n"
+            "\t\t}\n"
+            "\t}\n"
+            "}\n",
+            "\tif (md->public.bus_tap && !md->clock_inhibit && !RnW)\n"
+            "\t\tdragon_debug_bus_tap(md, RnW, A, Zrow, Zcol);\n"
+            "\n"
+            "\tif (!md->SAM->nWE) {\n"
+            "\t\tif (md->SAM->RAS0) {\n"
+            "\t\t\tram_d8(md->RAM, 0, 0, Zrow, Zcol, &md->CPU->D);\n"
+            "\t\t}\n"
+            "\t\tif (md->SAM->RAS1) {\n"
+            "\t\t\tram_d8(md->RAM, 0, 1, Zrow, Zcol, &md->CPU->D);\n"
+            "\t\t}\n"
+            "\t}\n"
+            "\n"
+            "\tif (md->public.bus_tap && !md->clock_inhibit && RnW)\n"
+            "\t\tdragon_debug_bus_tap(md, RnW, A, Zrow, Zcol);\n"
+            "}\n",
+        ),
+        (
+            "static void dragon_op_rts(struct machine *m) {\n",
+            fragment("dragon_peek.inc")
+            + "static void dragon_op_rts(struct machine *m) {\n",
+        ),
+    ])
+
+    # CoCo 3.
+    patch(root, "src/coco3.c", [
+        (
+            "static void cpu_cycle_noclock(void *sptr, int ncycles, _Bool RnW, uint16_t A);\n",
+            "static void cpu_cycle_noclock(void *sptr, int ncycles, _Bool RnW, uint16_t A);\n"
+            "static uint8_t coco3_peek_byte(struct machine *mach, unsigned address);\n"
+            "static _Bool coco3_poke_byte(struct machine *mach, unsigned address, uint8_t value);\n"
+            "static void coco3_memory_map(struct machine *mach, struct machine_memory_map *map);\n",
+        ),
+        (
+            "\tm->dump_ram = coco3_dump_ram;\n",
+            "\tm->dump_ram = coco3_dump_ram;\n"
+            "\tm->peek_byte = coco3_peek_byte;\n"
+            "\tm->poke_byte = coco3_poke_byte;\n"
+            "\tm->memory_map = coco3_memory_map;\n",
+        ),
+        (
+            "/* RAM access on the CoCo 3 is interesting.",
+            fragment("coco3_tap.inc") + "/* RAM access on the CoCo 3 is interesting.",
+        ),
+        (
+            "\t\tread_byte(mcc3, A);\n"
+            "#ifdef WANT_GDB_TARGET\n"
+            "\t\tif (mcc3->bp_session->wp_read_list)\n",
+            "\t\tread_byte(mcc3, A);\n"
+            "\t\tif (mcc3->public.bus_tap)\n"
+            "\t\t\tcoco3_debug_bus_tap(mcc3, 1, A);\n"
+            "#ifdef WANT_GDB_TARGET\n"
+            "\t\tif (mcc3->bp_session->wp_read_list)\n",
+        ),
+        (
+            "\t\twrite_byte(mcc3, A);\n"
+            "#ifdef WANT_GDB_TARGET\n"
+            "\t\tif (mcc3->bp_session->wp_write_list)\n",
+            "\t\tif (mcc3->public.bus_tap)\n"
+            "\t\t\tcoco3_debug_bus_tap(mcc3, 0, A);\n"
+            "\t\twrite_byte(mcc3, A);\n"
+            "#ifdef WANT_GDB_TARGET\n"
+            "\t\tif (mcc3->bp_session->wp_write_list)\n",
+        ),
+        (
+            "/* simulate an RTS without otherwise affecting machine state */\n"
+            "static void coco3_op_rts(struct machine *m) {\n",
+            fragment("coco3_peek.inc")
+            + "/* simulate an RTS without otherwise affecting machine state */\n"
+            "static void coco3_op_rts(struct machine *m) {\n",
         ),
     ])
 
@@ -481,6 +747,7 @@ def make_reinitable(root: Path) -> None:
             "\twindows32_shutdown();\n"
             "#endif\n"
             "\t// Forget everything xroar_init() left pointing at what was just freed.\n"
+            "\tmachine_debug_forget();\n"
             "\tselected_cart_config = NULL;\n"
             "\tcur_joy_config = NULL;\n"
             "\tcur_trap_def = NULL;\n"
@@ -527,6 +794,7 @@ def main() -> None:
     generate_config_h(root, version)
     register_modules(root)
     add_gime_debug_accessor(root)
+    add_debug_hooks(root)
     make_reinitable(root)
 
     # Record what the transforms produced, so a human comparing two staged
@@ -534,7 +802,11 @@ def main() -> None:
     digest = hashlib.sha256()
     for rel in ("config.h", "src/ui.c", "src/ao.c", "src/becker.c",
                 "src/tcc1014/tcc1014.h", "src/tcc1014/tcc1014.c",
-                "src/messenger.c", "src/dragon/coco.c"):
+                "src/messenger.c", "src/dragon/coco.c", "src/machine.h",
+                "src/machine.c", "src/machine_debug.h", "src/dragon/dragon.c",
+                "src/coco3.c", "src/mc6883.h", "src/mc6883.c",
+                "src/mc6847/mc6847.h", "src/mc6847/mc6847.c",
+                "src/mc6821.h", "src/mc6821.c", "src/xroar.c"):
         digest.update(read(root / rel).encode("utf-8", "surrogateescape"))
     print(f"XRoar {version} staged; transforms sha256 {digest.hexdigest()[:16]}")
 

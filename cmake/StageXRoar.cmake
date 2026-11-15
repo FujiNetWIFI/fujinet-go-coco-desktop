@@ -21,6 +21,12 @@
 set(XROAR_GEN "${CMAKE_SOURCE_DIR}/core/xroar-generated")
 set(XROAR_PATCH_SCRIPT "${CMAKE_SOURCE_DIR}/tools/xroar/patch-staged-tree.py")
 set(XROAR_BECKER_SRC "${CMAKE_SOURCE_DIR}/tools/xroar/support/becker.c")
+# The debugger hooks: the public header is copied into the staged src/, the
+# fragments are spliced in by the patch script (both hashed, so editing one
+# re-stages).
+set(XROAR_DEBUG_HEADER_SRC "${CMAKE_SOURCE_DIR}/tools/xroar/support/machine_debug.h")
+file(GLOB XROAR_DEBUG_FRAGMENTS
+     "${CMAKE_SOURCE_DIR}/tools/xroar/support/fragments/*.inc")
 
 option(XROAR_RESTAGE "Re-stage XRoar sources from the source checkout" OFF)
 
@@ -54,8 +60,14 @@ endif()
 file(SHA256 "${XROAR_PATCH_SCRIPT}" _xroar_patch_hash)
 file(SHA256 "${XROAR_BECKER_SRC}" _xroar_becker_hash)
 file(SHA256 "${CMAKE_CURRENT_LIST_FILE}" _xroar_stage_hash)
+file(SHA256 "${XROAR_DEBUG_HEADER_SRC}" _xroar_debug_hash)
+set(_xroar_fragment_hashes "")
+foreach(_fragment ${XROAR_DEBUG_FRAGMENTS})
+  file(SHA256 "${_fragment}" _fragment_hash)
+  string(APPEND _xroar_fragment_hashes " ${_fragment_hash}")
+endforeach()
 set(_xroar_want
-    "${_xroar_head} ${_xroar_patch_hash} ${_xroar_becker_hash} ${_xroar_stage_hash}")
+    "${_xroar_head} ${_xroar_patch_hash} ${_xroar_becker_hash} ${_xroar_stage_hash} ${_xroar_debug_hash}${_xroar_fragment_hashes}")
 
 set(_xroar_staged "")
 if(EXISTS "${XROAR_GEN}/.source-info")
@@ -97,6 +109,9 @@ if(XROAR_RESTAGE OR NOT EXISTS "${_xroar_sentinel}"
   # CoCo 2 <-> CoCo 3 switch tears the link down and back up. A client that
   # gives up at startup never recovers from either. See the file's own header.
   file(COPY "${XROAR_BECKER_SRC}" DESTINATION "${XROAR_GEN}/src")
+
+  # The public header of the debugger hooks (patched into machine.h).
+  file(COPY "${XROAR_DEBUG_HEADER_SRC}" DESTINATION "${XROAR_GEN}/src")
 
   execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${XROAR_PATCH_SCRIPT}" "${XROAR_GEN}"

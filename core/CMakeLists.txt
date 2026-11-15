@@ -398,6 +398,13 @@ add_executable(restart_test tests/restart_test.c)
 target_link_libraries(restart_test cocosession ZLIB::ZLIB)
 add_test(NAME restart_test COMMAND restart_test)
 
+# The engine-side hooks of the staged XRoar tree (cocoxroar.h): bus tap,
+# side-effect-free peek and map, chip accessors, video taps. One machine per
+# process, so registered once per machine below.
+add_executable(xroar_hooks_test tests/xroar_hooks_test.c)
+target_link_libraries(xroar_hooks_test cocosession)
+target_include_directories(xroar_hooks_test PRIVATE src)
+
 add_executable(session_test tests/session_test.c)
 target_link_libraries(session_test cocosession)
 
@@ -443,6 +450,10 @@ add_test(NAME drivewire_smoke COMMAND drivewire_smoke)
 # registered twice rather than looping over both machines in one process.
 add_test(NAME video_coco3 COMMAND video_test coco3)
 add_test(NAME video_coco2 COMMAND video_test coco2)
+add_test(NAME xroar_hooks_coco2 COMMAND xroar_hooks_test coco2)
+add_test(NAME xroar_hooks_coco3 COMMAND xroar_hooks_test coco3)
+set_tests_properties(xroar_hooks_coco2 xroar_hooks_coco3 PROPERTIES
+                     SKIP_RETURN_CODE 77 TIMEOUT 120)
 add_test(NAME gimerow COMMAND gimerow_test)
 # All need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;
 # drivewire_smoke additionally needs libfujinet and a free Becker port. All
