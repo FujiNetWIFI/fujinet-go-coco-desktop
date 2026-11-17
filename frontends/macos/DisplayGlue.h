@@ -9,6 +9,7 @@
 
 #include <stdatomic.h>
 
+#import "KeyForward.h"
 #include "cocosession.h"
 
 #define FN_VIEW      DisplayView
