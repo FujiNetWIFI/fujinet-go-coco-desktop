@@ -435,6 +435,13 @@ target_include_directories(drivewire_smoke PRIVATE src)
 add_executable(help_test tests/help_test.c)
 target_link_libraries(help_test cocosession)
 
+# The audio ring holds its fill against a mismatched device clock, with no
+# trims and no glitches (xroar/audioring_s16.h).
+add_executable(audioring_test tests/audioring_test.c)
+target_include_directories(audioring_test PRIVATE xroar)
+target_compile_definitions(audioring_test PRIVATE AUDIORING_HEADER="audioring_s16.h")
+add_test(NAME audioring COMMAND audioring_test)
+
 add_executable(video_test tests/video_test.c)
 target_link_libraries(video_test cocosession)
 target_include_directories(video_test PRIVATE src)

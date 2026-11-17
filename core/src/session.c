@@ -284,6 +284,7 @@ static void *emu_thread_main(void *arg)
     const int pace_log = getenv("COCO_PACE_LOG") != NULL;
 
     coco_thread_setname("coco-emu");
+    apple_realtime_begin(1e9 / 60.0);   /* a real-time slot on macOS; a no-op elsewhere */
 
     /* XRoar resolves every machine and cartridge ROM by basename against this
      * path, so it must be set before the core starts. */

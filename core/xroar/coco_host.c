@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "audioring_s16.h"
 #include <time.h>
 
 #include "top-config.h"
@@ -183,73 +184,37 @@ int cocohost_get_joystick_button(int port, int button) {
 
 /* --- audio ring ------------------------------------------------------------
  * Interleaved stereo S16 at 44100 Hz. ao_desktop pushes completed buffers; the
- * session's audio backend drains. Bounded blocking wait so the audio device
- * paces consumption and the 60Hz emulator loop paces production. */
-#define AUDIO_RING_SAMPLES (44100 * 2)  /* ~1s stereo */
-static int16_t g_audio_ring[AUDIO_RING_SAMPLES];
-static size_t g_audio_head = 0;  /* read */
-static size_t g_audio_tail = 0;  /* write */
-static size_t g_audio_count = 0;
-static pthread_mutex_t g_audio_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_audio_cond = PTHREAD_COND_INITIALIZER;
+ * session's audio backend drains. The ring is rate-controlled
+ * (audioring_s16.h): the producer stretches or squeezes the audio by at most
+ * 0.5% to hold the fill near ~33 ms, so a display-locked frame clock never
+ * overfills it and nothing is cut with a click. An underrun is silence
+ * padding, never stale data. */
+#define AUDIO_TARGET_FRAMES    (44100 / 30)
+#define AUDIO_EMERGENCY_FRAMES (44100 / 4)   /* a stall, not drift */
+static audioring g_audio_ring;
 static atomic_int g_audio_active = 0;
 
 void cocohost_audio_set_active(int active) {
-    pthread_mutex_lock(&g_audio_mutex);
     atomic_store(&g_audio_active, active ? 1 : 0);
-    pthread_cond_broadcast(&g_audio_cond);
-    pthread_mutex_unlock(&g_audio_mutex);
 }
 
 void cocohost_clear_audio(void) {
-    pthread_mutex_lock(&g_audio_mutex);
-    g_audio_head = g_audio_tail = g_audio_count = 0;
-    pthread_cond_broadcast(&g_audio_cond);
-    pthread_mutex_unlock(&g_audio_mutex);
+    audioring_flush(&g_audio_ring);
 }
 
 void cocohost_push_audio(const int16_t *interleaved, int nframes) {
     if (!interleaved || nframes <= 0) return;
-    const size_t samples = (size_t)nframes * 2;
-    pthread_mutex_lock(&g_audio_mutex);
-    for (size_t i = 0; i < samples; ++i) {
-        if (g_audio_count >= AUDIO_RING_SAMPLES) {
-            /* Overflow: drop oldest to keep latency bounded. */
-            g_audio_head = (g_audio_head + 1) % AUDIO_RING_SAMPLES;
-            g_audio_count--;
-        }
-        g_audio_ring[g_audio_tail] = interleaved[i];
-        g_audio_tail = (g_audio_tail + 1) % AUDIO_RING_SAMPLES;
-        g_audio_count++;
-    }
-    pthread_cond_broadcast(&g_audio_cond);
-    pthread_mutex_unlock(&g_audio_mutex);
+    audioring_push(&g_audio_ring, interleaved, nframes, AUDIO_TARGET_FRAMES);
 }
 
 int cocohost_fill_audio(int16_t *out, int max_samples) {
     if (!out || max_samples <= 0) return 0;
-    pthread_mutex_lock(&g_audio_mutex);
-    /* Wait (bounded) for a full block, unless audio is being torn down. */
-    struct timespec deadline;
-    clock_gettime(CLOCK_REALTIME, &deadline);
-    deadline.tv_nsec += 50 * 1000000L;  /* 50ms cap */
-    if (deadline.tv_nsec >= 1000000000L) {
-        deadline.tv_sec++;
-        deadline.tv_nsec -= 1000000000L;
-    }
-    while (atomic_load(&g_audio_active) && g_audio_count < (size_t)max_samples) {
-        if (pthread_cond_timedwait(&g_audio_cond, &g_audio_mutex, &deadline) != 0)
-            break;  /* timed out: emit what we have, silence-padded */
-    }
-    int produced = 0;
-    while (produced < max_samples && g_audio_count > 0) {
-        out[produced++] = g_audio_ring[g_audio_head];
-        g_audio_head = (g_audio_head + 1) % AUDIO_RING_SAMPLES;
-        g_audio_count--;
-    }
-    pthread_mutex_unlock(&g_audio_mutex);
+    const int frames = max_samples / 2;
+    const int got = atomic_load(&g_audio_active)
+        ? audioring_pull(&g_audio_ring, out, frames, AUDIO_TARGET_FRAMES, AUDIO_EMERGENCY_FRAMES)
+        : 0;
     /* Silence-pad the remainder so the consumer always gets a full block. */
-    for (int i = produced; i < max_samples; ++i) out[i] = 0;
+    for (int i = got * 2; i < max_samples; ++i) out[i] = 0;
     return max_samples;
 }
 
