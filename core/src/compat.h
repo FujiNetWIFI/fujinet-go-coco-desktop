@@ -15,7 +15,9 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <time.h>
-#include "apple_realtime.h"
+#if defined(__APPLE__)
+#include <mach/mach_time.h>   /* only this: <mach/mach.h> declares slot_name() */
+#endif
 
 #if defined(_WIN32)
 #include <winsock2.h>

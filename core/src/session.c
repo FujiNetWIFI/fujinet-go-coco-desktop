@@ -24,6 +24,7 @@
 #include "coco_host.h"
 #include "cocovidtab.h"
 #include "compat.h"
+#include "apple_realtime.h"
 #include "session_internal.h"
 
 /****************************************************************************/
