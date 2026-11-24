@@ -85,9 +85,15 @@ Color BASIC (`bas13.rom`), Extended Color BASIC (`extbas11.rom`) and the
 CoCo 3's Super Extended Color BASIC (`coco3.rom`) are Tandy/Microware
 copyrighted firmware and are **not** freely licensed.
 
-The HDB-DOS DW3 cartridge ROMs (`hdbdw3bck.rom`, `hdbdw3bc3.rom`) *are* freely
-redistributable, and the FujiNet link does not work without them, so they are
-always embedded.
+The FujiDOS cartridge ROM (`fujidos.rom`, one 16K image for both machines) *is*
+freely redistributable, and the FujiNet link does not work without it, so it is
+always embedded. FujiDOS 1.0 is Rich Stephens's
+[fujidos-coco](https://github.com/RichStephens/fujidos-coco), release asset
+`fujidos-1.0.rom`, SHA-256
+`a51cd96c12dc84e74564dc5dd18552cddc5b79434707d586d276bdca50cee14e`. It is
+HDB-DOS 1.5 (Copyright (C) 2004 Boisy G. Pitre, with contributions from Robert
+Gault, David Ladd and Darren Atkinson; source in the NitrOS-9 ToolShed) with
+FujiNet commands added. The upstream repository carries no LICENSE file yet.
 
 Which system ROMs are embedded is controlled by the `WITH_COCO_ROMS` CMake
 option:
@@ -95,7 +101,7 @@ option:
 - **`ON` (default)** — all five are embedded, so a development build boots
   straight to the CoCo 3 banner. **This configuration must not be
   redistributed.**
-- **`OFF`** — only the HDB-DOS pair is embedded; the user supplies the system
+- **`OFF`** — only FujiDOS is embedded; the user supplies the system
   ROMs. **Every artifact this repository publishes is built this way** — the
   flatpaks, the macOS bundle, the Windows folder and installer, and the release
   job.
@@ -123,7 +129,7 @@ page, rather than a black screen.
 **This is enforced, not just documented.** The `no_embedded_roms_*` ctests take
 a distinctive slice of every ROM image in `tools/xroar/roms` and grep a built
 binary for it; a Tandy ROM that gets compiled in despite the option fails the
-build, and a *missing* HDB-DOS ROM fails it too. They register only when
+build, and a *missing* FujiDOS ROM fails it too. They register only when
 `WITH_COCO_ROMS=OFF`, one per binary — `boot_smoke` plus every frontend
 executable built in that configuration.
 

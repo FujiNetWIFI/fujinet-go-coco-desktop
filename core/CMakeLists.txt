@@ -199,8 +199,7 @@ set(COCO_ROM_DIR_SRC "${CMAKE_SOURCE_DIR}/tools/xroar/roms")
 # Always embedded: freely redistributable, and the FujiNet link does not work
 # without them.
 set(COCO_FREE_ROMS
-  "${COCO_ROM_DIR_SRC}/hdbdw3bck.rom"
-  "${COCO_ROM_DIR_SRC}/hdbdw3bc3.rom")
+  "${COCO_ROM_DIR_SRC}/fujidos.rom")
 # Tandy/Microware copyright: local development only.
 set(COCO_SYSTEM_ROMS
   "${COCO_ROM_DIR_SRC}/bas13.rom"
@@ -475,6 +474,7 @@ set_tests_properties(debug debug_coco2 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 18
 add_test(NAME cpu_switch COMMAND cpu_switch_test)
 add_test(NAME boot_smoke COMMAND boot_smoke)
 add_test(NAME drivewire_smoke COMMAND drivewire_smoke)
+add_test(NAME drivewire_smoke_coco2 COMMAND drivewire_smoke coco2)
 # One process per machine -- see video_test.c for why the same binary is
 # registered twice rather than looping over both machines in one process.
 add_test(NAME video_coco3 COMMAND video_test coco3)
@@ -500,12 +500,12 @@ set_tests_properties(vidtab_live_coco2 vidtab_live_coco3 PROPERTIES
 # All need system ROMs, which a WITH_COCO_ROMS=OFF checkout does not have;
 # drivewire_smoke additionally needs libfujinet and a free Becker port. All
 # are reported as 77 rather than as failures.
-set_tests_properties(boot_smoke drivewire_smoke debug cpu_switch video_coco3
+set_tests_properties(boot_smoke drivewire_smoke drivewire_smoke_coco2 debug cpu_switch video_coco3
                      video_coco2 PROPERTIES SKIP_RETURN_CODE 77)
 # It boots a machine, types at it and waits on real DriveWire traffic, so it
 # is the one test here that takes seconds rather than milliseconds. It also
 # binds a fixed port, so it must not run beside another copy of itself.
-set_tests_properties(drivewire_smoke PROPERTIES TIMEOUT 120 RUN_SERIAL ON)
+set_tests_properties(drivewire_smoke drivewire_smoke_coco2 PROPERTIES TIMEOUT 120 RUN_SERIAL ON)
 
 # The no_embedded_roms check is registered at the TOP level instead, so it can
 # also be pointed at the frontend executables -- those are the artifacts that

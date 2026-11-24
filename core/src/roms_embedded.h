@@ -10,9 +10,10 @@
  *
  * Two classes:
  *
- *   is_system = 0  HDB-DOS DW3 (hdbdw3bck, hdbdw3bc3). Freely redistributable,
- *                  and the FujiNet link does not work without them, so they
- *                  are always present.
+ *   is_system = 0  FujiDOS (fujidos: HDB-DOS DW3 plus FujiNet commands, one
+ *                  16K image for both machines). Freely redistributable, and
+ *                  the FujiNet link does not work without it, so it is always
+ *                  present.
  *   is_system = 1  Color BASIC, Extended Color BASIC and Super Extended Color
  *                  BASIC. Tandy/Microware copyright, present only in a
  *                  WITH_COCO_ROMS=ON build, which must not be redistributed.

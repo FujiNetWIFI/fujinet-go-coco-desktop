@@ -306,8 +306,7 @@ void MainWindow::buildMenus()
 {
     QMenu *machineMenu = menuBar()->addMenu(QStringLiteral("&Machine"));
 
-    /* Switching the machine hard-resets it with the matching HDB-DOS Becker
-     * ROM, in place -- FujiNet stays up and becker reconnects. */
+    /* Switching the machine hard-resets it, in place -- FujiNet stays up and becker reconnects. */
     QMenu *modelMenu = machineMenu->addMenu(QStringLiteral("&Model"));
     m_machineGroup = new QActionGroup(this);
     m_machineGroup->setExclusive(true);

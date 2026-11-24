@@ -93,7 +93,7 @@ static int item_present(const char *dir, int item)
 /* The CoCo 2 boots from Color BASIC plus Extended Color BASIC, the CoCo 3
  * from its one 32K image. XRoar will start without them but comes up to a
  * blank screen, so the frontends ask first. Cartridge ROMs are deliberately
- * not counted: HDB-DOS is always present, and a missing one costs the FujiNet
+ * not counted: FujiDOS is always present, and a missing one costs the FujiNet
  * link, not the boot. */
 int roms_present_for_machine(const char *dir, int machine)
 {

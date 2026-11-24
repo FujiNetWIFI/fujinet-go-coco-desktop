@@ -452,7 +452,7 @@ typedef struct {
 } cocodebug_io;
 int cocodebug_io_get(cocodebug *d, cocodebug_io *out);
 
-/* The cartridge as text: "Cartridge: HDB-DOS DriveWire (Becker) 'hdbdw3bck'" */
+/* The cartridge as text: "Cartridge: RS-DOS with becker port 'fujidos'" */
 int cocodebug_cart_info(cocodebug *d, char *dst, int dstsz);
 
 /* ---- sound ---------------------------------------------------------------- */

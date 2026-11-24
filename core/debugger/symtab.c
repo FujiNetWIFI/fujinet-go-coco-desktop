@@ -14,8 +14,8 @@
  * These are the routines Radio Shack itself documented for ML programmers to
  * call, so -- unlike most of a given ROM revision's internal layout -- they
  * are the addresses actually meant to stay stable across Color BASIC, and
- * are also reachable in the disk/HDB-DOS and CoCo 3 SECB configurations this
- * project boots, since none of those replace the low BASIC ROM bank. HDB-DOS
+ * are also reachable in the disk/FujiDOS and CoCo 3 SECB configurations this
+ * project boots, since none of those replace the low BASIC ROM bank. FujiDOS
  * and Super ECB's own additional entry points are deliberately NOT included
  * here: no equally authoritative primary source (ROM disassembly or vendor
  * documentation, not a secondary summary) was in hand for those, and a wrong

@@ -187,7 +187,7 @@ static int copy_tree(const char *src, const char *dst)
 /* Write the compiled-in ROM images into the ROM directory, skipping any name
  * that is already there. That skip is the whole policy: a build with the Tandy
  * system ROMs compiled in lays them down once, a build without them lays down
- * only the freely redistributable HDB-DOS pair, and in either case a ROM the
+ * only the freely redistributable FujiDOS image, and in either case a ROM the
  * user imported (or hand-copied) is never overwritten.
  *
  * Failures are silent by design -- a read-only or full data directory should

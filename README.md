@@ -12,8 +12,8 @@ on KDE, AppKit on macOS and Win32 on Windows.
 Emulation is a headless build of [XRoar](https://www.6809.org.uk/xroar/).
 FujiNet is not a subprocess: the firmware is built as a shared library,
 `dlopen`'d into the process, and joined to the emulator over the **Becker
-port** — DriveWire carried on loopback TCP 65504 — so HDB-DOS finds it as its
-boot device and the machine drops straight into FujiNet's CONFIG.
+port** — DriveWire carried on loopback TCP 65504 — so FujiDOS (HDB-DOS with FujiNet
+commands added) finds it as its boot device and the machine drops straight into FujiNet's CONFIG.
 
 Note the direction, because it is the opposite of the other two desktop ports:
 here **FujiNet listens and the emulator connects out to it**, so the session
@@ -170,7 +170,7 @@ cmake -B build -G Ninja \
 
 Color BASIC, Extended Color BASIC and the CoCo 3's Super Extended Color BASIC
 are Tandy/Microware copyrighted firmware and are **not** freely licensed. The
-HDB-DOS DW3 cartridge ROMs are freely redistributable and are always embedded,
+FujiDOS cartridge ROM is freely redistributable and is always embedded,
 so the FujiNet link works either way.
 
 - **`WITH_COCO_ROMS=ON`** (the default for a local build) compiles the system
@@ -216,7 +216,7 @@ cocosession pace: 60 fps over 1000 ms (0 behind, 60 on vsync, machine 59940 mHz)
 report 0 on vsync by design: no desktop display ticks at 50 Hz, so the pacer
 declines to lock and uses the wall clock instead.
 
-If the machine boots but HDB-DOS loops connect/disconnect on a ~5 s metronome,
+If the machine boots but FujiDOS loops connect/disconnect on a ~5 s metronome,
 check for a stray standalone `fujinet-pc-coco` holding 65504 before suspecting
 the bus:
 

@@ -316,7 +316,7 @@ patch("build.sh", [
         '        # is a folder you copy and run, so anything the DLL imports\n'
         '        # from the MSYS2 prefix (libcrypto-3-x64.dll, zlib1.dll) is\n'
         '        # simply absent on the target and LoadLibrary fails. The\n'
-        '        # session then runs without FujiNet and HDB-DOS finds no\n'
+        '        # session then runs without FujiNet and FujiDOS finds no\n'
         '        # boot device -- a silent failure, which is why CI checks\n'
         '        # the DLL imports as well as the exe.\n'
         '        CMAKE_EXTRA_ARGS+=("-DOPENSSL_USE_STATIC_LIBS=ON")\n'

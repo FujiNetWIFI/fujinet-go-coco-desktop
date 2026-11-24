@@ -7,10 +7,10 @@ the app.
 
 FujiNet Go CoCo is a Tandy Color Computer 2 or 3 with a FujiNet built in. The
 machine is XRoar's, with a 6809 or 6309 processor. The FujiNet runs inside the
-app, joined to the emulator over the Becker port, so HDB-DOS finds it as its boot
+app, joined to the emulator over the Becker port, so FujiDOS finds it as its boot
 device and the machine goes straight into FujiNet's CONFIG.
 
-1. **Start the app.** The machine boots HDB-DOS into CONFIG. The Tandy ROMs are
+1. **Start the app.** The machine boots FujiDOS into CONFIG. The Tandy ROMs are
    part of the app, or come from **Import BIOS…** if your build has none. See
    [BIOS and ROMs](#bios-and-roms).
 2. **Pick a disk in CONFIG.** Browse hosts and the SD folder, mount an image and
@@ -273,8 +273,7 @@ window's own buttons never take a key.
 # Machines
 
 The Machine, Display, Artifact Colour and CPU menus switch while the machine
-runs, with no session restart. A machine switch resets the machine, with the
-matching HDB-DOS Becker ROM, and FujiNet stays connected.
+runs, with no session restart. A machine switch resets the machine, and FujiNet stays connected.
 
 - **Machine**: *Color Computer 3* (the default) or *Color Computer 2*.
 - **Display**: the television signal: *S-Video*, *Composite (blue-red)* (the
@@ -327,6 +326,14 @@ listens and the emulator connects out to it, so the app starts FujiNet first.
 
 CONFIG is FujiNet's program for choosing what to boot: the SD folder and servers
 on the network. Pick an image and the machine boots it.
+
+## FujiDOS
+
+The disk ROM is FujiDOS, HDB-DOS with FujiNet commands added, from the
+[fujidos-coco](https://github.com/RichStephens/fujidos-coco) project. At the
+BASIC prompt, `CONFIG` and `LOBBY` reboot into CONFIG and the game lobby;
+`TIME$`, `DATE$` and `IP$` ask the FujiNet; `OPEN "I",#1,"N:https://..."` reads a
+network file. The project's README lists every command.
 
 ## The FujiNet menu
 

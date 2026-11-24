@@ -172,8 +172,8 @@ const char *cocosession_last_error(const cocosession *s);
 /* ---- live machine / video switching --------------------------------------
  * All three take effect on the emulator thread within a frame, without
  * restarting the session: FujiNet stays up and the Becker link reconnects.
- * Switching the machine hard-resets it (and swaps in the matching HDB-DOS
- * Becker ROM), so it is destructive to whatever was running; the TV input and
+ * Switching the machine hard-resets it (the FujiDOS Becker ROM serves both
+ * machines), so it is destructive to whatever was running; the TV input and
  * cross-colour renderer are not. */
 void cocosession_set_machine(cocosession *s, int machine);
 void cocosession_set_tv_input(cocosession *s, int tv_input);

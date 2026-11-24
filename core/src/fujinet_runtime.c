@@ -129,7 +129,7 @@ int fujinet_start(cocosession *s)
  * this target different. main_setup() comes back as soon as the devices are
  * constructed, but the DriveWire bus then logs "BoIPChannel: No WiFi!" and
  * suspends itself for a full second before it begins listening. Start the
- * emulator in that window and HDB-DOS boots, prints its banner, asks the
+ * emulator in that window and FujiDOS boots, prints its banner, asks the
  * DriveWire server for its boot sector, gets nothing -- and hangs there
  * forever, with no OK prompt and no way to type. The screen just sits on the
  * banner looking like the emulator is fine.

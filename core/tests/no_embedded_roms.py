@@ -7,7 +7,7 @@ tools/xroar/roms and greps the built binary for it. Anything found is a ROM
 that got compiled in despite the option, which would make the artifact
 non-redistributable.
 
-The HDB-DOS DW3 pair (hdbdw3bck.rom, hdbdw3bc3.rom) is expected to be present:
+FujiDOS (fujidos.rom) is expected to be present:
 those are freely redistributable and the FujiNet link does not work without
 them.
 
@@ -17,7 +17,7 @@ usage: no_embedded_roms.py <binary> <rom-dir>
 import sys
 from pathlib import Path
 
-EXPECTED_PRESENT = {"hdbdw3bck.rom", "hdbdw3bc3.rom"}
+EXPECTED_PRESENT = {"fujidos.rom"}
 PROBE = 64
 
 

@@ -511,7 +511,7 @@ static void check_registers(cocodebug *d)
 static void check_memory_and_search(cocodebug *d)
 {
     uint8_t buf[16];
-    static const uint8_t text[] = { 'F', 'U', 'J', 'I', 'N', 'E', 'T' };
+    static const uint8_t text[] = { 'F', 'U', 'J', 'I', 'Q', 'Z', 'X' };
     uint32_t hits[8], found = 0;
     uint8_t pat[COCOSEARCH_MAX], mask;
     int count, flags;
@@ -536,11 +536,11 @@ static void check_memory_and_search(cocodebug *d)
     ok("the CPU space is 64K", cocodebug_space_size(d, COCODEBUG_SPACE_CPU) == 0x10000);
     ok("a read past the end is clamped", cocodebug_mem_read(d, COCODEBUG_SPACE_CPU, 0xFFFE, buf, 8) == 2);
 
-    cocosearch_parse(COCOSEARCH_TEXT, "fujinet", pat, &count, &mask, &flags);
+    cocosearch_parse(COCOSEARCH_TEXT, "fujiqzx", pat, &count, &mask, &flags);
     ok("search finds a text, ignoring case",
        cocodebug_search(d, COCODEBUG_SPACE_CPU, pat, count, mask, flags, 0x0800, 0x0A00, hits, 8) == 1 &&
        hits[0] == 0x0900);
-    cocosearch_parse(COCOSEARCH_HEX, "46 55 4A", pat, &count, &mask, &flags);
+    cocosearch_parse(COCOSEARCH_HEX, "46 55 4A 49 51 5A 58", pat, &count, &mask, &flags);
     ok("search finds hex bytes", cocodebug_search(d, COCODEBUG_SPACE_CPU, pat, count, mask, flags, 0x0800,
                                                   0x0A00, hits, 8) == 1);
     ok("'to' bounds the start address, not the end",
@@ -569,7 +569,7 @@ static void check_memory_and_search(cocodebug *d)
         ok("PHYS is 512K or 2M", size == 0x80000 || size == 0x200000);
         ok("PHYS poke and read", cocodebug_mem_write(d, COCODEBUG_SPACE_PHYS, size - 7, text, 7) == 7 &&
            cocodebug_mem_read(d, COCODEBUG_SPACE_PHYS, size - 7, high, 7) == 7 && !memcmp(high, text, 7));
-        cocosearch_parse(COCOSEARCH_TEXT, "fujinet", pat, &count, &mask, &flags);
+        cocosearch_parse(COCOSEARCH_TEXT, "fujiqzx", pat, &count, &mask, &flags);
         ok("PHYS search finds it at the top of RAM",
            cocodebug_search(d, COCODEBUG_SPACE_PHYS, pat, count, mask, flags, 0, size - 1, hits, 8) >= 1);
         ok("PHYS reads past the end are clamped",

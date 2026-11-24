@@ -4,7 +4,7 @@
  * boot_smoke proves the emulator runs. This proves the two halves are
  * *joined*, and it checks two things the rest of the suite cannot:
  *
- *   1. DriveWire traffic. HDB-DOS DW3 auto-boots from drive 0, so FujiNet's
+ *   1. DriveWire traffic. FujiDOS auto-boots from drive 0, so FujiNet's
  *      own console log grows an "OP_READ: DRIVE 0 - SECTOR n" line within a
  *      second of the machine starting. That line can only appear if bytes
  *      crossed the loopback socket in BOTH directions -- the emulator asked
@@ -236,7 +236,7 @@ static int screen_responds_to_typing(cocosession *s)
     return ok;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     cocosession_paths paths;
     cocosession_start_opts opts;
@@ -273,7 +273,9 @@ int main(void)
     }
 
     cocosession_default_opts(s, &opts);
-    opts.machine = COCOSESSION_MACHINE_COCO3;
+    /* "coco2" boots the same FujiDOS image on the CoCo 2. */
+    opts.machine = (argc > 1 && !strcmp(argv[1], "coco2"))
+                       ? COCOSESSION_MACHINE_COCO2 : COCOSESSION_MACHINE_COCO3;
     opts.enable_fujinet = 1;
     opts.enable_audio = 0;   /* no audio device in CI */
     opts.enable_gamepad = 0; /* no input devices in CI */
@@ -293,7 +295,7 @@ int main(void)
     }
 
     /* --- 1. DriveWire ---------------------------------------------------
-     * HDB-DOS DW3 boots from drive 0 by itself; nothing has to be typed. */
+     * FujiDOS boots from drive 0 by itself; nothing has to be typed. */
     log = malloc((size_t)log_max);
     if (!log) {
         cocosession_stop(s);
@@ -310,7 +312,7 @@ int main(void)
     }
 
     if (found) {
-        printf("drivewire_smoke: HDB-DOS read a sector over the Becker port "
+        printf("drivewire_smoke: FujiDOS read a sector over the Becker port "
                "from the in-process runtime\n");
     } else {
         fprintf(stderr,

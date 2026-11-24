@@ -15,7 +15,7 @@ name: Flatpak
 # WITH_COCO_ROMS=OFF is baked into both manifests already (not a workflow
 # concern): the system ROMs are not freely redistributable (see
 # COMPLIANCE.md), so every artifact this repository publishes -- these
-# flatpaks included -- embeds only the freely redistributable HDB-DOS pair.
+# flatpaks included -- embeds only the freely redistributable FujiDOS ROM.
 
 on:
   push:

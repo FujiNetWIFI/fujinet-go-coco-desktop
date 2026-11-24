@@ -516,7 +516,7 @@ int cocosession_start(cocosession *s, const cocosession_start_opts *opts)
      *
      * And it is not enough to start it first: fujinet_start() returns as soon
      * as the devices are constructed, but the DriveWire bus then suspends
-     * itself for a full second before it begins listening. HDB-DOS boots in
+     * itself for a full second before it begins listening. FujiDOS boots in
      * well under that, asks for its boot sector, gets nothing, and HANGS on
      * the banner with no OK prompt -- which looks exactly like a working
      * emulator until you try to type. So wait for the listener to actually

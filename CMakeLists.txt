@@ -30,12 +30,12 @@ option(WITH_WEBVIEW "Embed the FujiNet web UI (WebKitGTK / QtWebEngine)" ON)
 
 # Color BASIC, Extended Color BASIC and the CoCo 3's Super Extended Color BASIC
 # are Tandy/Microware copyrighted firmware and are NOT freely licensed. The
-# HDB-DOS DW3 cartridge ROMs are freely redistributable and are always
+# FujiDOS cartridge ROM is freely redistributable and is always
 # embedded, so the FujiNet link works either way.
 #
 #   ON  (default) -- embed the system ROMs too, so a development build boots
 #                    straight to the CoCo 3 banner. NOT for redistribution.
-#   OFF           -- embed only HDB-DOS; the user supplies the system ROMs
+#   OFF           -- embed only FujiDOS; the user supplies the system ROMs
 #                    through the "Import BIOS..." path. Every artifact
 #                    this repository publishes is built this way, and
 #                    core/tests/no_embedded_roms.py checks that claim against

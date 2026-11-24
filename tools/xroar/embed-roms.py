@@ -10,7 +10,8 @@ is embedded here into the user's ROM directory on first start and points
 
 Two classes, and the difference is the whole point:
 
-  --free    HDB-DOS DW3 (hdbdw3bck, hdbdw3bc3). Freely redistributable, and
+  --free    FujiDOS (fujidos, 16K: HDB-DOS DW3 plus FujiNet commands, both
+            machines). Freely redistributable, and
             the FujiNet link does not work without them, so they are ALWAYS
             embedded.
   --system  Color BASIC (bas13), Extended Color BASIC (extbas11) and the
@@ -35,8 +36,7 @@ EXPECTED = {
     "bas13": 0x2000,
     "extbas11": 0x2000,
     "coco3": 0x8000,
-    "hdbdw3bck": 0x2000,
-    "hdbdw3bc3": 0x2000,
+    "fujidos": 0x4000,
 }
 
 

@@ -408,7 +408,8 @@ static void apply_pending_commands(void) {
     if (sw >= 0) {
         int swtv = atomic_exchange(&g_pending_machine_tv, -1);
         const char *name = (sw == COCO_MACHINE_COCO2) ? "coco2bus" : "coco3";
-        const char *rom = (sw == COCO_MACHINE_COCO2) ? "hdbdw3bck" : "hdbdw3bc3";
+        /* One FujiDOS image serves both machines. */
+        const char *rom = "fujidos";
         int tvv = tv_input_xroar(swtv);
         struct machine_config *mc = machine_config_by_name(name);
         struct cart_config *cc = cart_config_by_name("becker");
@@ -498,12 +499,11 @@ int cocohost_core_start(int machine, int tv_input, int ccr, int cpu) {
     argv[argc++] = "-machine";   argv[argc++] = machine_name;
     argv[argc++] = "-machine-cpu"; argv[argc++] = cpu_name;
     argv[argc++] = "-tv-input";  argv[argc++] = tv_name;
-    /* RS-DOS with Becker port: auto-loads HDB-DOS (@rsdos_becker = hdbdw3bck). */
+    /* RS-DOS with Becker port, carrying FujiDOS (HDB-DOS DW3 plus the FujiNet
+     * commands). One 16K image runs on the CoCo 2 and the CoCo 3; without
+     * -cart-rom XRoar would pick hdbdw3bck. */
     argv[argc++] = "-cart";      argv[argc++] = "becker";
-    if (machine != COCO_MACHINE_COCO2) {
-        /* CoCo 3 wants the CoCo 3 HDB-DOS variant. */
-        argv[argc++] = "-cart-rom"; argv[argc++] = "hdbdw3bc3";
-    }
+    argv[argc++] = "-cart-rom";  argv[argc++] = "fujidos";
     argv[argc++] = "-becker";
     argv[argc++] = "-becker-ip";   argv[argc++] = a_ip;
     argv[argc++] = "-becker-port"; argv[argc++] = a_port;

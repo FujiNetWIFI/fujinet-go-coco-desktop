@@ -39,10 +39,10 @@
 extern "C" {
 #endif
 
-/* Machine selection (also picks the matching HDB-DOS Becker ROM). */
+/* Machine selection (FujiDOS, the Becker ROM, serves both). */
 enum {
-    COCO_MACHINE_COCO3 = 0,  /* xroar -machine coco3,    becker ROM hdbdw3bc3 */
-    COCO_MACHINE_COCO2 = 1,  /* xroar -machine coco2bus, becker ROM hdbdw3bck */
+    COCO_MACHINE_COCO3 = 0,  /* xroar -machine coco3 */
+    COCO_MACHINE_COCO2 = 1,  /* xroar -machine coco2bus */
 };
 
 /* CPU selection (xroar -machine-cpu). Independent of machine: both machine
@@ -129,7 +129,7 @@ void cocohost_set_ccr(int ccr);
 
 /* In-place CoCo 2 <-> CoCo 3 switch: no XRoar re-init (that crashes), just
  * ui_update_state(machine/cartridge) + xroar_hard_reset on the emulator
- * thread, with the matching HDB-DOS Becker ROM. FujiNet stays up; becker
+ * thread, with the FujiDOS Becker ROM. FujiNet stays up; becker
  * reconnects. */
 void cocohost_set_machine(int machine, int tv_input);
 

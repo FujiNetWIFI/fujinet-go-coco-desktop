@@ -535,8 +535,8 @@ void coco_prefs_show(CocoWindow *parent, cocosession *session,
     adw_preferences_group_set_title(machine, "Machine");
     adw_preferences_group_set_header_suffix(machine, coco_help_button("prefs/Machine"));
     adw_preferences_group_set_description(
-        machine, "Switching machines resets it, with the matching HDB-DOS "
-                 "Becker ROM. FujiNet stays connected.");
+        machine, "Switching machines resets it. FujiNet stays "
+                 "connected.");
     adw_preferences_group_add(
         machine, combo_row(state, "Model", "machine",
                            COCOSESSION_MACHINE_COCO3,
